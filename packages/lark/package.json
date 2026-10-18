@@ -1,0 +1,10 @@
+{
+  "name": "@deepauto/lark",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepauto/contracts": "workspace:*",
+    "@larksuiteoapi/node-sdk": "1.66.1"
+  }
+}

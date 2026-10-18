@@ -1,0 +1,18 @@
+{
+  "name": "@deepauto/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepauto/agent-core": "workspace:*",
+    "@deepauto/contracts": "workspace:*",
+    "@deepauto/db": "workspace:*",
+    "@deepauto/github": "workspace:*",
+    "@deepauto/lark": "workspace:*",
+    "@deepauto/runner-manager": "workspace:*",
+    "bullmq": "5.78.0",
+    "dotenv": "17.4.2",
+    "ioredis": "5.10.1",
+    "zod": "4.4.3"
+  }
+}

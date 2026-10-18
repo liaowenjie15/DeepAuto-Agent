@@ -1,0 +1,12 @@
+.DS_Store
+
+# Local application credentials and developer overrides.
+.env
+.env.local
+.env.*.local
+
+node_modules
+.turbo
+dist
+coverage
+*.tsbuildinfo

@@ -1,0 +1,11 @@
+{
+  "name": "@deepauto/github",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepauto/contracts": "workspace:*",
+    "jose": "6.2.3",
+    "zod": "4.4.3"
+  }
+}

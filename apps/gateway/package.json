@@ -1,0 +1,14 @@
+{
+  "name": "@deepauto/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepauto/contracts": "workspace:*",
+    "@deepauto/github": "workspace:*",
+    "@deepauto/lark": "workspace:*",
+    "dotenv": "17.4.2",
+    "hono": "4.12.23",
+    "zod": "4.4.3"
+  }
+}
