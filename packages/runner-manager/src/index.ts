@@ -9,6 +9,13 @@ import {
 } from '@deepauto/contracts';
 import { z } from 'zod';
 
+export {
+  type GitHubActionsExecutionRequest,
+  type GitHubActionsExecutionResult,
+  GitHubActionsExecutor,
+  type GitHubActionsExecutorConfig,
+} from './github-actions-executor';
+
 const harnessRequestSchema = z.object({
   jobId: z.string().trim().min(1),
   attemptId: z.string().trim().min(1),
