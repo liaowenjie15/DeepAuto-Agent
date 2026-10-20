@@ -18,6 +18,7 @@
     "test:unit": "bun test src"
   },
   "dependencies": {
+    "@deepauto/github": "workspace:*",
     "@deepauto/contracts": "workspace:*",
     "dockerode": "4.0.12",
     "zod": "4.4.3"

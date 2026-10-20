@@ -5,6 +5,19 @@ import {
 } from '@deepauto/contracts';
 import { z } from 'zod';
 
+export {
+  createGitHubAppJwt,
+  createGitHubAppWorkflowDispatcher,
+  createGitHubInstallationAccessToken,
+  dispatchGitHubWorkflow,
+  type GitHubAppClientOptions,
+  type GitHubAppCredentials,
+  type GitHubFetch,
+  type GitHubInstallationAccessToken,
+  type GitHubWorkflowDispatch,
+  type GitHubWorkflowDispatcher,
+} from './actions';
+
 const issueCommentSchema = z.object({
   action: z.literal('created'),
   repository: z.object({ id: z.union([z.string(), z.number()]) }),
