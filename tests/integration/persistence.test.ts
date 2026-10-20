@@ -215,8 +215,16 @@ describe('persistence and queue integration', () => {
 
     const recoveredQueue = createTestQueue(`${testPrefix}-outbox-queue`);
     try {
-      expect(await publishPendingOutboxEvents(prisma, recoveredQueue)).toBe(1);
-      expect(await publishPendingOutboxEvents(prisma, recoveredQueue)).toBe(0);
+      expect(
+        await publishPendingOutboxEvents(prisma, recoveredQueue, 100, [
+          created.job.id,
+        ]),
+      ).toBe(1);
+      expect(
+        await publishPendingOutboxEvents(prisma, recoveredQueue, 100, [
+          created.job.id,
+        ]),
+      ).toBe(0);
       expect(
         await recoveredQueue.getJobCountByTypes(
           'waiting',

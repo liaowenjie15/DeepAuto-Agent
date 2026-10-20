@@ -48,9 +48,14 @@ const eventTypes = {
 function assertCallbackEvents(
   attemptId: string,
   status: ExecutionStatus,
+  reason: string | undefined,
   events: ExecutionEvent[],
 ): void {
-  if (events.length === 0 || events[0]?.type !== 'started') {
+  if (events.length === 0) {
+    if (status === 'FAILED' && reason?.trim()) return;
+    throw new Error('Execution callback must begin with a started event');
+  }
+  if (events[0]?.type !== 'started') {
     throw new Error('Execution callback must begin with a started event');
   }
 
@@ -149,7 +154,12 @@ export async function acceptExecutionCallback(
   input: ExecutionCallbackInput,
 ): Promise<ExecutionCallbackResult> {
   const now = input.now ?? new Date();
-  assertCallbackEvents(input.attemptId, input.status, input.events);
+  assertCallbackEvents(
+    input.attemptId,
+    input.status,
+    input.reason,
+    input.events,
+  );
 
   return prisma.$transaction(async (transaction) => {
     const execution = await transaction.execution.findFirst({

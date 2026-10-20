@@ -190,6 +190,7 @@ checkout 当前 PR 待合并版本 / main 提交
 | 阶段 C（外部连接） | 飞书 SDK 长连接、真实 GitHub App 安装/仓库权限和受控 staging 冒烟尚未实现；当前测试只使用脱敏 fixture、HMAC 与本地隔离服务，不使用真实凭证 |
 | 阶段 D（Harness 协议） | 已实现受控假 CLI Harness：仅允许已有绝对工作目录、受限环境变量和最长一小时超时；JSONL 事件必须以 `started` 开始并绑定同一 `attemptId`，终态顺序、必需产物和退出码均被校验。单测已覆盖工作目录绑定、环境中不泄露数据库/GitHub/Docker 凭证、非零退出、缺失或重复终态、伪造 attempt、取消、超时及产物缺失。此阶段不等同于已接入真实 CLI runtime 或 GitHub Actions |
 | 阶段 D（执行记录） | 已实现 `JobAttempt → Execution → Artifact` 的持久化回执链路。回执 claim 只能在未过期、同一运行中 Execution 上使用一次；成功回执会在同一事务中保存有序事件、可信产物并完成 Attempt/Job。集成测试还覆盖跨 attempt 伪造、过期/并发重放、取消后回执拒绝且不消耗 claim，以及超时恢复同步将 Execution 标为 `TIMED_OUT`；全程仅使用本地 PostgreSQL，不引入真实凭证 |
+| 阶段 D（Worker 协调闭环） | 已新增受控本地 Worker 协调器：按 `conversationKey` 领取 Redis 锁，领取 Job Attempt，创建 Execution/一次性回执 claim，调用可注入 Harness，并将规范化终态原子写回。真实 PostgreSQL/Redis 集成测试覆盖完成闭环、会话已被占用时 `deferred` 且不创建 Attempt，以及 Harness 在产生结果前抛错时记录可追溯失败。`test:integration` 现会先构建 workspace，避免测试解析陈旧 package `dist` 产物 |
 | 阶段 D（外部冒烟与评估） | 真实 CLI runtime、GitHub Actions executor、隔离 GitHub 测试仓库、GitHub App、真实 PR 创建、外部 staging 冒烟及固定模型评估集/报告均未实现；需在选择 runtime 并准备隔离资源后再启动 |
 
-阶段 A、B、C 与阶段 D 的假进程协议、执行记录、防伪与去重验证均已落地。下一步仍应先评估飞书 SDK、GitHub App 权限校验及真实执行器的接入顺序；只有选定 runtime 并准备隔离仓库/App 后，才开始真实 GitHub Actions/PR 冒烟。
+阶段 A、B、C 与阶段 D 的假进程协议、执行记录、防伪、去重及受控 Worker 协调闭环均已落地。下一步应先确定首个真实 CLI runtime 与隔离 GitHub 测试仓库/App，再实现 GitHub Actions executor、真实 PR 冒烟和外部 SDK 连接；当前 Worker 协调器不自行选择仓库、分支、镜像、模型或长期凭证。

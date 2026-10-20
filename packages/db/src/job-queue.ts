@@ -32,9 +32,13 @@ export async function publishPendingOutboxEvents(
   prisma: PrismaClient,
   queue: JobEnqueuer,
   limit = 100,
+  jobIds?: readonly string[],
 ): Promise<number> {
   const events = await prisma.outboxEvent.findMany({
-    where: { publishedAt: null },
+    where: {
+      publishedAt: null,
+      jobId: jobIds ? { in: [...jobIds] } : undefined,
+    },
     orderBy: { createdAt: 'asc' },
     take: limit,
   });
