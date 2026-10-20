@@ -3,10 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:deploy": "prisma migrate deploy",
+    "build": "bun run generate && rm -rf dist && tsc -p tsconfig.build.json",
+    "lint": "biome check src/index.ts src/authorization.ts src/credential-claim.ts src/execution-service.ts src/invocation-service.ts src/job-lifecycle.ts src/job-queue.ts src/test-environment.ts src/test-environment.test.ts package.json tsconfig.json tsconfig.build.json prisma.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "bun test src"
+  },
   "dependencies": {
+    "@deepauto/contracts": "workspace:*",
     "@prisma/adapter-pg": "7.8.0",
     "@prisma/client": "7.8.0",
     "dotenv": "17.4.2",
+    "bullmq": "5.78.0",
+    "ioredis": "5.10.1",
     "pg": "8.20.0"
   },
   "devDependencies": {

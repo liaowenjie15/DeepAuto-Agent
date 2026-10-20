@@ -13,17 +13,24 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "turbo build",
+    "build": "bun run verify:targets && bun run db:generate && bun build scripts/check-validation-targets.ts --target=bun --outfile=dist/scripts/check-validation-targets.js && bun dist/scripts/check-validation-targets.js && turbo build",
     "dev": "turbo dev",
-    "lint": "turbo lint && biome check package.json biome.json turbo.json tsconfig.base.json apps packages",
+    "lint": "bun run verify:targets && turbo lint && biome check package.json biome.json turbo.json tsconfig.base.json scripts",
     "lint:fix": "turbo lint:fix && biome check . --write",
-    "typecheck": "turbo typecheck",
-    "test": "turbo test",
+    "typecheck": "bun run verify:targets && bun run db:generate && tsc -p scripts/tsconfig.json --noEmit && turbo typecheck",
+    "test": "bun run test:unit",
+    "test:unit": "bun run verify:targets && bun test scripts && turbo test:unit",
+    "verify:targets": "bun scripts/check-validation-targets.ts",
+    "db:generate": "bun run --cwd packages/db generate",
+    "infra:test:up": "docker compose -f compose.test.yaml up -d --wait",
+    "infra:test:down": "docker compose -f compose.test.yaml down --volumes --remove-orphans",
+    "test:integration": "sh scripts/run-integration-tests.sh",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.12",
+    "@types/bun": "1.3.14",
     "@types/node": "25.9.2",
     "dotenv": "17.4.2",
     "turbo": "2.11.9",

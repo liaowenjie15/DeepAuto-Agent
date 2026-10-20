@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InvocationSource {
+  FEISHU
+  GITHUB
+}
+
+enum InvocationAnchor {
+  MESSAGE
+  ISSUE
+  PULL_REQUEST
+  COMMENT
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AttemptStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum OutboxEventKind {
+  JOB_ENQUEUE
+}
+
+enum MemberRole {
+  MEMBER
+  OPERATOR
+  ADMIN
+}
+
+enum CredentialProvider {
+  LARK_USER
+  GITHUB_INSTALLATION
+}
+
+enum ExecutionStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  TIMED_OUT
+}
+
+enum ExecutionEventType {
+  STARTED
+  PROGRESS
+  ARTIFACT
+  COMPLETED
+  FAILED
+}
+
+enum ExecutionArtifactName {
+  DIFF
+  TEST_RESULT
+  COMMIT_SHA
+  PULL_REQUEST
+  WORKSPACE
+}
+
+model Workspace {
+  id        String            @id
+  createdAt DateTime          @default(now())
+  members   WorkspaceMember[]
+  repositories WorkspaceRepository[]
+}
+
+model WorkspaceMember {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  role         MemberRole @default(MEMBER)
+  active       Boolean    @default(true)
+  larkOpenId   String?
+  githubUserId String?
+  githubLogin  String?
+  createdAt    DateTime   @default(now())
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, larkOpenId])
+  @@unique([workspaceId, githubUserId])
+}
+
+model WorkspaceRepository {
+  id                   String    @id @default(cuid())
+  workspaceId          String
+  providerRepositoryId String
+  enabled              Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, providerRepositoryId])
+}
+
+model Invocation {
+  id              String           @id @default(cuid())
+  source          InvocationSource
+  workspaceId     String
+  actorId         String
+  conversationKey String
+  anchor          InvocationAnchor
+  instruction     String
+  sourceEventId   String
+  receivedAt      DateTime
+  createdAt       DateTime         @default(now())
+  job             Job?
+
+  @@unique([source, sourceEventId], map: "invocations_source_event_id_key")
+  @@index([workspaceId, conversationKey])
+}
+
+model Job {
+  id                   String    @id @default(cuid())
+  invocationId         String    @unique
+  conversationKey String
+  idempotencyKey       String    @unique
+  status               JobStatus @default(QUEUED)
+  currentAttemptNumber Int       @default(0)
+  cancelledAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  invocation           Invocation @relation(fields: [invocationId], references: [id], onDelete: Cascade)
+  attempts             JobAttempt[]
+  outboxEvents         OutboxEvent[]
+
+  @@index([conversationKey, status])
+}
+
+model JobAttempt {
+  id         String        @id @default(cuid())
+  jobId      String
+  number     Int
+  status     AttemptStatus @default(RUNNING)
+  startedAt  DateTime      @default(now())
+  finishedAt DateTime?
+  job        Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  execution  Execution?
+
+  @@unique([jobId, number])
+  @@index([jobId, status])
+}
+
+model Execution {
+  id            String          @id @default(cuid())
+  attemptId     String          @unique
+  status        ExecutionStatus @default(RUNNING)
+  reason        String?
+  startedAt     DateTime        @default(now())
+  finishedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  attempt       JobAttempt      @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  events        ExecutionEvent[]
+  artifacts     ExecutionArtifact[]
+  callbackClaim ExecutionCallbackClaim?
+
+  @@index([status, startedAt])
+}
+
+model ExecutionEvent {
+  id          String             @id @default(cuid())
+  executionId String
+  sequence    Int
+  type        ExecutionEventType
+  payload     Json
+  createdAt   DateTime           @default(now())
+  execution   Execution          @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, sequence])
+  @@index([executionId, createdAt])
+}
+
+model ExecutionArtifact {
+  id          String                @id @default(cuid())
+  executionId String
+  name        ExecutionArtifactName
+  value       String
+  createdAt   DateTime              @default(now())
+  execution   Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, name])
+}
+
+model ExecutionCallbackClaim {
+  id          String    @id @default(cuid())
+  executionId String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+model OutboxEvent {
+  id            String         @id @default(cuid())
+  jobId         String
+  kind          OutboxEventKind
+  queueSequence Int            @default(0)
+  dedupeKey     String         @unique
+  createdAt     DateTime       @default(now())
+  publishedAt   DateTime?
+  job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, queueSequence])
+  @@index([publishedAt, createdAt])
+}
+
+model CredentialClaim {
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  actorId             String
+  attemptId           String
+  provider            CredentialProvider
+  credentialReference String
+  expiresAt           DateTime
+  usedAt              DateTime?
+  createdAt           DateTime           @default(now())
+
+  @@index([workspaceId, actorId, attemptId])
+  @@index([expiresAt])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  actorId     String?
+  jobId       String?
+  attemptId   String?
+  action      String
+  metadata    Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([jobId, createdAt])
+}

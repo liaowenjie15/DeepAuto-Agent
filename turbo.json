@@ -16,12 +16,15 @@
       "cache": false
     },
     "typecheck": {
+      "dependsOn": ["build", "^build"],
+      "outputs": []
+    },
+    "test:unit": {
       "dependsOn": ["^build"],
       "outputs": []
     },
-    "test": {
-      "dependsOn": ["^build"],
-      "outputs": []
+    "generate": {
+      "outputs": ["src/generated/**"]
     }
   }
 }

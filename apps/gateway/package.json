@@ -3,8 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "lint": "biome check src package.json tsconfig.json tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "bun test src"
+  },
   "dependencies": {
     "@deepauto/contracts": "workspace:*",
+    "@deepauto/db": "workspace:*",
     "@deepauto/github": "workspace:*",
     "@deepauto/lark": "workspace:*",
     "dotenv": "17.4.2",
