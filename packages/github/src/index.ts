@@ -17,6 +17,13 @@ export {
   type GitHubWorkflowDispatch,
   type GitHubWorkflowDispatcher,
 } from './actions';
+export {
+  assertGitHubActionsOidcClaims,
+  type GitHubActionsOidcClaims,
+  type GitHubActionsOidcTokenVerifier,
+  type GitHubActionsOidcTrustPolicy,
+  verifyGitHubActionsOidcToken,
+} from './actions-oidc';
 
 const issueCommentSchema = z.object({
   action: z.literal('created'),

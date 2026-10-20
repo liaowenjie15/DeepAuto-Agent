@@ -27,6 +27,19 @@ export type ExecutionCallbackResult = {
   accepted: boolean;
 };
 
+export type ExecutionBootstrap = {
+  executionId: string;
+  attemptId: string;
+  instruction: string;
+};
+
+export type ExecutionCallbackByExecutionIdInput = Omit<
+  ExecutionCallbackInput,
+  'attemptId' | 'callbackClaimId'
+> & {
+  executionId: string;
+};
+
 const terminalEventTypes = new Set(['completed', 'failed']);
 
 const artifactNames = {
@@ -146,6 +159,74 @@ export async function startExecution(
       },
       include: { callbackClaim: true },
     });
+  });
+}
+
+export async function getActiveExecutionBootstrap(
+  prisma: PrismaClient,
+  executionId: string,
+  now = new Date(),
+): Promise<ExecutionBootstrap | null> {
+  const execution = await prisma.execution.findFirst({
+    where: {
+      id: executionId,
+      status: 'RUNNING',
+      callbackClaim: { usedAt: null, expiresAt: { gt: now } },
+      attempt: {
+        status: AttemptStatus.RUNNING,
+        job: { status: JobStatus.RUNNING, cancelledAt: null },
+      },
+    },
+    select: {
+      id: true,
+      attemptId: true,
+      attempt: {
+        select: {
+          job: { select: { invocation: { select: { instruction: true } } } },
+        },
+      },
+    },
+  });
+
+  if (!execution) return null;
+
+  return {
+    executionId: execution.id,
+    attemptId: execution.attemptId,
+    instruction: execution.attempt.job.invocation.instruction,
+  };
+}
+
+export async function acceptExecutionCallbackByExecutionId(
+  prisma: PrismaClient,
+  input: ExecutionCallbackByExecutionIdInput,
+): Promise<ExecutionCallbackResult> {
+  const now = input.now ?? new Date();
+  const execution = await prisma.execution.findFirst({
+    where: {
+      id: input.executionId,
+      status: 'RUNNING',
+      callbackClaim: { usedAt: null, expiresAt: { gt: now } },
+      attempt: {
+        status: AttemptStatus.RUNNING,
+        job: { status: JobStatus.RUNNING, cancelledAt: null },
+      },
+    },
+    select: {
+      attemptId: true,
+      callbackClaim: { select: { id: true } },
+    },
+  });
+
+  if (!execution?.callbackClaim) return { accepted: false };
+
+  return acceptExecutionCallback(prisma, {
+    attemptId: execution.attemptId,
+    callbackClaimId: execution.callbackClaim.id,
+    status: input.status,
+    reason: input.reason,
+    events: input.events,
+    now,
   });
 }
 

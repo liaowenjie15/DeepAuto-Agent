@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { ExecutionEvent } from '../../packages/contracts/src';
 import {
+  acceptExecutionCallbackByExecutionId,
   acceptExecutionCallback,
   AttemptStatus,
   authorizeInboundInvocation,
@@ -13,6 +14,7 @@ import {
   CredentialProvider,
   enqueueJob,
   finishJobAttempt,
+  getActiveExecutionBootstrap,
   getTestEnvironment,
   issueCredentialClaim,
   JobStatus,
@@ -604,6 +606,56 @@ describe('persistence and queue integration', () => {
         select: { status: true },
       }),
     ).toEqual({ status: AttemptStatus.COMPLETED });
+    expect(
+      await prisma.executionCallbackClaim.findUniqueOrThrow({
+        where: { id: execution.callbackClaim?.id },
+        select: { usedAt: true },
+      }),
+    ).toEqual({ usedAt: new Date('2026-10-20T00:01:00.000Z') });
+  });
+
+  test('returns only active execution context and consumes its callback claim internally', async () => {
+    const created = await createOrGetInvocationJob(
+      prisma,
+      input({ instruction: 'change fixture before to after' }),
+    );
+    const attempt = await beginJobAttempt(prisma, created.job.id);
+    const execution = await startExecution(
+      prisma,
+      {
+        attemptId: attempt?.id ?? '',
+        callbackExpiresAt: new Date('2026-10-20T01:00:00.000Z'),
+      },
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+
+    expect(
+      await getActiveExecutionBootstrap(
+        prisma,
+        execution.id,
+        new Date('2026-10-20T00:01:00.000Z'),
+      ),
+    ).toEqual({
+      executionId: execution.id,
+      attemptId: attempt?.id,
+      instruction: 'change fixture before to after',
+    });
+    expect(
+      await getActiveExecutionBootstrap(
+        prisma,
+        execution.id,
+        new Date('2026-10-20T01:00:00.000Z'),
+      ),
+    ).toBeNull();
+
+    expect(
+      await acceptExecutionCallbackByExecutionId(prisma, {
+        executionId: execution.id,
+        status: 'COMPLETED',
+        events: completedExecutionEvents(attempt?.id ?? ''),
+        now: new Date('2026-10-20T00:01:00.000Z'),
+      }),
+    ).toEqual({ accepted: true });
     expect(
       await prisma.executionCallbackClaim.findUniqueOrThrow({
         where: { id: execution.callbackClaim?.id },
