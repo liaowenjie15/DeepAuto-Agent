@@ -1,6 +1,6 @@
 # DeepAuto Agent：测试与验证机制实施方案
 
-> 状态：**阶段 A、B、C 已本地实现并验证；阶段 D 的受控假 CLI Harness 协议已实现并验证。远端 CI / 分支保护、真实外部连接、真实 CLI runtime 与隔离仓库冒烟仍待实施**  
+> 状态：**阶段 A、B、C 已本地实现并验证；阶段 D 的受控假 CLI Harness 协议已实现并验证。Codex CLI、隔离 GitHub 测试仓库与最小权限 GitHub App 已准备；远端 CI / 分支保护、真实 runtime 接入和隔离仓库冒烟仍待实施**
 > 编写日期：2026-10-19  
 > 适用范围：DeepAuto 平台代码、飞书与 GitHub 入口、异步任务、CLI Harness 及其代码交付  
 > 参考：[统一 Agent 平台架构](./03-unified-agent-architecture.md) · [开发工具链基线](./04-development-toolchain-baseline.md) · [CLI Runtime 与 GitHub Actions Harness 架构决策](./05-cli-runtime-github-actions-harness-architecture.md) · [Grain 的代码测试与验证机制](./06-grain-code-validation-mechanisms.md)
@@ -187,10 +187,10 @@ checkout 当前 PR 待合并版本 / main 提交
 | 阶段 B（恢复与终态） | 已实现事务 outbox、发布失败后的保留与真实 BullMQ 重放、超时 Attempt 的失败标记与重入队、重复终态 callback 去重、过期 Attempt 不覆盖新 Attempt、取消与完成竞争时只允许一个终态，以及取消旧 Job 不影响同会话下一 Job。当前集成 suite 共 9 个场景、37 个断言 |
 | 阶段 C（入口与授权） | 已实现飞书文本消息的 bot 自身过滤、群聊 `@bot` 准入和标准化；GitHub `issue_comment` 的 SHA-256 HMAC 验签、显式 mention 准入、事件标准化；Gateway 在签名验收后执行成员映射、GitHub 仓库 allowlist 和持久化任务创建。真实 Gateway 集成测试验证了“签名 webhook → 已关联成员/已 allowlist 仓库 → 仅创建一个 Job”及未关联成员的拒绝 |
 | 阶段 C（凭证 claim） | 已实现绑定 `workspaceId + actorId + attemptId` 的一次性 claim；真实数据库测试覆盖过期、actor/attempt 错配、顺序重放与并发重放，并确认审计 metadata 不保存 credential reference。用户 OAuth refresh-token 轮换仍待 OAuth 能力进入仓库 |
-| 阶段 C（外部连接） | 飞书 SDK 长连接、真实 GitHub App 安装/仓库权限和受控 staging 冒烟尚未实现；当前测试只使用脱敏 fixture、HMAC 与本地隔离服务，不使用真实凭证 |
+| 阶段 C（外部连接） | 飞书 SDK 长连接和受控 staging 冒烟尚未实现；`liaowenjie15/deepauto-harness-sandbox` 已作为隔离仓库创建，GitHub App 已按最小权限安装，但平台尚未使用真实凭证调用它。当前测试仍只使用脱敏 fixture、HMAC 与本地隔离服务。 |
 | 阶段 D（Harness 协议） | 已实现受控假 CLI Harness：仅允许已有绝对工作目录、受限环境变量和最长一小时超时；JSONL 事件必须以 `started` 开始并绑定同一 `attemptId`，终态顺序、必需产物和退出码均被校验。单测已覆盖工作目录绑定、环境中不泄露数据库/GitHub/Docker 凭证、非零退出、缺失或重复终态、伪造 attempt、取消、超时及产物缺失。此阶段不等同于已接入真实 CLI runtime 或 GitHub Actions |
 | 阶段 D（执行记录） | 已实现 `JobAttempt → Execution → Artifact` 的持久化回执链路。回执 claim 只能在未过期、同一运行中 Execution 上使用一次；成功回执会在同一事务中保存有序事件、可信产物并完成 Attempt/Job。集成测试还覆盖跨 attempt 伪造、过期/并发重放、取消后回执拒绝且不消耗 claim，以及超时恢复同步将 Execution 标为 `TIMED_OUT`；全程仅使用本地 PostgreSQL，不引入真实凭证 |
 | 阶段 D（Worker 协调闭环） | 已新增受控本地 Worker 协调器：按 `conversationKey` 领取 Redis 锁，领取 Job Attempt，创建 Execution/一次性回执 claim，调用可注入 Harness，并将规范化终态原子写回。真实 PostgreSQL/Redis 集成测试覆盖完成闭环、会话已被占用时 `deferred` 且不创建 Attempt，以及 Harness 在产生结果前抛错时记录可追溯失败。`test:integration` 现会先构建 workspace，避免测试解析陈旧 package `dist` 产物 |
-| 阶段 D（外部冒烟与评估） | 真实 CLI runtime、GitHub Actions executor、隔离 GitHub 测试仓库、GitHub App、真实 PR 创建、外部 staging 冒烟及固定模型评估集/报告均未实现；需在选择 runtime 并准备隔离资源后再启动 |
+| 阶段 D（外部冒烟与评估） | 首期 runtime 已确定为固定版本的 Codex CLI；隔离 GitHub 测试仓库、正常修改/失败/超时/无修改 fixture 与最小权限 GitHub App 已准备。真实 Codex CLI 接入、GitHub Actions executor、真实 PR 创建、外部 staging 冒烟及固定模型评估集/报告仍未实现。 |
 
-阶段 A、B、C 与阶段 D 的假进程协议、执行记录、防伪、去重及受控 Worker 协调闭环均已落地。下一步应先确定首个真实 CLI runtime 与隔离 GitHub 测试仓库/App，再实现 GitHub Actions executor、真实 PR 冒烟和外部 SDK 连接；当前 Worker 协调器不自行选择仓库、分支、镜像、模型或长期凭证。
+阶段 A、B、C 与阶段 D 的假进程协议、执行记录、防伪、去重及受控 Worker 协调闭环均已落地。外部资源已准备完成；下一步先验证远端 `Validation` workflow 并在 `main` 配置必需检查与 PR 合并策略，再实现 GitHub Actions executor、真实 PR 冒烟和外部 SDK 连接。当前 Worker 协调器不自行选择仓库、分支、镜像、模型或长期凭证。
