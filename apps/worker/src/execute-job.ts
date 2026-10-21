@@ -5,11 +5,13 @@ import {
   type PrismaClient,
   releaseConversationClaim,
   startExecution,
+  transferConversationClaim,
   tryClaimConversation,
 } from '@deepauto/db';
 import {
   type CliHarnessRequest,
   type CliHarnessResult,
+  type GitHubActionsExecutor,
   runCliHarness,
 } from '@deepauto/runner-manager';
 import type IORedis from 'ioredis';
@@ -45,9 +47,27 @@ export type ExecuteQueuedJobDependencies = {
 };
 
 export type QueuedJobExecutionResult = {
-  status: CliHarnessResult['status'] | 'deferred' | 'skipped' | 'rejected';
+  status:
+    | CliHarnessResult['status']
+    | 'dispatched'
+    | 'deferred'
+    | 'skipped'
+    | 'rejected';
   attemptId?: string;
   executionId?: string;
+  executionRef?: string;
+};
+
+export type ExecuteQueuedGitHubActionsJobInput = Pick<
+  ExecuteQueuedJobInput,
+  'jobId' | 'workerId' | 'callbackTtlMilliseconds'
+>;
+
+export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
+  ExecuteQueuedJobDependencies,
+  'runHarness'
+> & {
+  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start'>;
 };
 
 export function toExecutionStatus(
@@ -64,6 +84,24 @@ function assertCallbackTtl(value: number): void {
   ) {
     throw new Error('Worker callback TTL must be between 1ms and one hour');
   }
+}
+
+async function failExecutionBeforeDispatch(
+  prisma: PrismaClient,
+  execution: { id: string; callbackClaim: { id: string } | null },
+  attemptId: string,
+  reason: string,
+  now: Date,
+): Promise<boolean> {
+  const callback = await acceptExecutionCallback(prisma, {
+    attemptId,
+    callbackClaimId: execution.callbackClaim?.id ?? '',
+    status: 'FAILED',
+    reason,
+    events: [],
+    now,
+  });
+  return callback.accepted;
 }
 
 export async function executeQueuedJob(
@@ -152,4 +190,119 @@ export async function executeQueuedJob(
       input.workerId,
     );
   }
+}
+
+export async function executeQueuedGitHubActionsJob(
+  input: ExecuteQueuedGitHubActionsJobInput,
+  dependencies: ExecuteQueuedGitHubActionsJobDependencies,
+): Promise<QueuedJobExecutionResult> {
+  const callbackTtlMilliseconds =
+    input.callbackTtlMilliseconds ?? defaultCallbackTtlMilliseconds;
+  assertCallbackTtl(callbackTtlMilliseconds);
+
+  const job = await dependencies.prisma.job.findUnique({
+    where: { id: input.jobId },
+    select: { conversationKey: true },
+  });
+  if (!job) return { status: 'skipped' };
+
+  const ownsConversation = await tryClaimConversation(
+    dependencies.redis,
+    job.conversationKey,
+    input.workerId,
+    callbackTtlMilliseconds,
+  );
+  if (!ownsConversation) return { status: 'deferred' };
+
+  let conversationOwner = input.workerId;
+  let releaseConversation = true;
+  try {
+    const attempt = await beginJobAttempt(dependencies.prisma, input.jobId);
+    if (!attempt) return { status: 'skipped' };
+
+    const now = dependencies.now ?? (() => new Date());
+    const execution = await startExecution(
+      dependencies.prisma,
+      {
+        attemptId: attempt.id,
+        callbackExpiresAt: new Date(now().getTime() + callbackTtlMilliseconds),
+      },
+      now(),
+    );
+    const lockTransferred = await transferConversationClaim(
+      dependencies.redis,
+      job.conversationKey,
+      input.workerId,
+      execution.id,
+      callbackTtlMilliseconds,
+    );
+    if (!lockTransferred) {
+      const accepted = await failExecutionBeforeDispatch(
+        dependencies.prisma,
+        execution,
+        attempt.id,
+        'Worker lost the conversation claim before GitHub Actions dispatch',
+        now(),
+      );
+      return {
+        status: accepted ? 'failed' : 'rejected',
+        attemptId: attempt.id,
+        executionId: execution.id,
+      };
+    }
+
+    conversationOwner = execution.id;
+    try {
+      const started = await dependencies.githubActionsExecutor.start({
+        executionId: execution.id,
+      });
+      releaseConversation = false;
+      return {
+        status: 'dispatched',
+        attemptId: attempt.id,
+        executionId: execution.id,
+        executionRef: started.executionRef,
+      };
+    } catch {
+      const accepted = await failExecutionBeforeDispatch(
+        dependencies.prisma,
+        execution,
+        attempt.id,
+        'GitHub Actions dispatch failed before the execution started',
+        now(),
+      );
+      return {
+        status: accepted ? 'failed' : 'rejected',
+        attemptId: attempt.id,
+        executionId: execution.id,
+      };
+    }
+  } finally {
+    if (releaseConversation) {
+      await releaseConversationClaim(
+        dependencies.redis,
+        job.conversationKey,
+        conversationOwner,
+      );
+    }
+  }
+}
+
+export async function releaseGitHubActionsExecutionConversation(
+  executionId: string,
+  dependencies: Pick<ExecuteQueuedJobDependencies, 'prisma' | 'redis'>,
+): Promise<boolean> {
+  const execution = await dependencies.prisma.execution.findUnique({
+    where: { id: executionId },
+    select: {
+      attempt: { select: { job: { select: { conversationKey: true } } } },
+    },
+  });
+  if (!execution) return false;
+
+  return releaseConversationClaim(
+    dependencies.redis,
+    execution.attempt.job.conversationKey,
+    executionId,
+  );
 }

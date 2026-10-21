@@ -83,3 +83,21 @@ export async function releaseConversationClaim(
   );
   return released === 1;
 }
+
+export async function transferConversationClaim(
+  redis: IORedis,
+  conversationKey: string,
+  ownerId: string,
+  nextOwnerId: string,
+  ttlMilliseconds: number,
+): Promise<boolean> {
+  const transferred = await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3]) else return nil end",
+    1,
+    `deepauto:conversation:${conversationKey}`,
+    ownerId,
+    nextOwnerId,
+    ttlMilliseconds,
+  );
+  return transferred === 'OK';
+}

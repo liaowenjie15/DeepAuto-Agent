@@ -1,7 +1,8 @@
-import { createHmac } from 'node:crypto';
 import { afterAll, beforeEach, expect, test } from 'bun:test';
-import { createPrismaClient, getTestEnvironment } from '../../packages/db/src';
+import { createHmac } from 'node:crypto';
 import { createGatewayApp } from '../../apps/gateway/src/app';
+import type { PilotAdmissionConfiguration } from '../../apps/gateway/src/pilot-admission';
+import { createPrismaClient, getTestEnvironment } from '../../packages/db/src';
 
 const environment = getTestEnvironment();
 const prisma = createPrismaClient(environment.databaseUrl);
@@ -56,7 +57,7 @@ afterAll(async () => {
 
 test('accepts an authorized signed GitHub command and deduplicates its delivery', async () => {
   await prisma.workspace.create({ data: { id: workspaceId } });
-  await prisma.workspaceMember.create({
+  const member = await prisma.workspaceMember.create({
     data: { workspaceId, githubUserId: '8' },
   });
   await prisma.workspaceRepository.create({
@@ -67,6 +68,12 @@ test('accepts an authorized signed GitHub command and deduplicates its delivery'
     githubWebhookSecret: webhookSecret,
     githubWorkspaceId: workspaceId,
     githubBotMention: '@deepauto',
+    pilotAdmission: {
+      enabled: true,
+      allowedWorkspaceIds: [workspaceId],
+      allowedMemberIds: [member.id],
+      allowedRepositoryIds: ['42'],
+    },
   });
 
   const first = await app.fetch(
@@ -90,6 +97,111 @@ test('accepts an authorized signed GitHub command and deduplicates its delivery'
   expect(
     await prisma.job.count({ where: { invocation: { workspaceId } } }),
   ).toBe(1);
+});
+
+test('pauses approved GitHub commands before creating a Job, then resumes without restarting', async () => {
+  await prisma.workspace.create({ data: { id: workspaceId } });
+  const member = await prisma.workspaceMember.create({
+    data: { workspaceId, githubUserId: '8' },
+  });
+  await prisma.workspaceRepository.create({
+    data: { workspaceId, providerRepositoryId: '42' },
+  });
+  let pilotAdmission: PilotAdmissionConfiguration = { enabled: false };
+  const app = createGatewayApp({
+    prisma,
+    githubWebhookSecret: webhookSecret,
+    githubWorkspaceId: workspaceId,
+    githubBotMention: '@deepauto',
+    pilotAdmission: () => pilotAdmission,
+  });
+
+  const response = await app.fetch(
+    signedRequest(payload(), `${testPrefix}-paused-delivery`),
+  );
+
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ status: 'paused' });
+  expect(
+    await prisma.job.count({ where: { invocation: { workspaceId } } }),
+  ).toBe(0);
+  expect(
+    await prisma.auditEvent.findFirst({
+      where: { workspaceId, action: 'pilot.invocation_paused' },
+      select: { actorId: true, metadata: true },
+    }),
+  ).toEqual({
+    actorId: expect.any(String),
+    metadata: {
+      reason: 'paused',
+      source: 'github',
+      sourceEventId: `${testPrefix}-paused-delivery`,
+      repositoryId: '42',
+    },
+  });
+
+  pilotAdmission = {
+    enabled: true,
+    allowedWorkspaceIds: [workspaceId],
+    allowedMemberIds: [member.id],
+    allowedRepositoryIds: ['42'],
+  };
+  const resumed = await app.fetch(
+    signedRequest(payload(), `${testPrefix}-resumed-delivery`),
+  );
+  expect(resumed.status).toBe(202);
+  expect(await resumed.json()).toMatchObject({
+    status: 'accepted',
+    created: true,
+  });
+  expect(
+    await prisma.job.count({ where: { invocation: { workspaceId } } }),
+  ).toBe(1);
+});
+
+test('rejects pilot commands outside the configured member scope and records the decision', async () => {
+  await prisma.workspace.create({ data: { id: workspaceId } });
+  await prisma.workspaceMember.create({
+    data: { workspaceId, githubUserId: '8' },
+  });
+  await prisma.workspaceRepository.create({
+    data: { workspaceId, providerRepositoryId: '42' },
+  });
+  const app = createGatewayApp({
+    prisma,
+    githubWebhookSecret: webhookSecret,
+    githubWorkspaceId: workspaceId,
+    githubBotMention: '@deepauto',
+    pilotAdmission: {
+      enabled: true,
+      allowedWorkspaceIds: [workspaceId],
+      allowedMemberIds: ['another-member'],
+      allowedRepositoryIds: ['42'],
+    },
+  });
+
+  const response = await app.fetch(
+    signedRequest(payload(), `${testPrefix}-out-of-scope-delivery`),
+  );
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({ status: 'unauthorized' });
+  expect(
+    await prisma.job.count({ where: { invocation: { workspaceId } } }),
+  ).toBe(0);
+  expect(
+    await prisma.auditEvent.findFirst({
+      where: { workspaceId, action: 'pilot.invocation_rejected' },
+      select: { metadata: true },
+    }),
+  ).toEqual({
+    metadata: {
+      reason: 'member_not_allowed',
+      source: 'github',
+      sourceEventId: `${testPrefix}-out-of-scope-delivery`,
+      repositoryId: '42',
+    },
+  });
 });
 
 test('rejects signed GitHub commands from an unmapped member', async () => {
