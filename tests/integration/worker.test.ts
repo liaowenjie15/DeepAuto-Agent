@@ -1,5 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import type { CliHarnessRequest } from '../../packages/runner-manager/src';
+import {
+  executeQueuedGitHubActionsJob,
+  executeQueuedJob,
+  releaseGitHubActionsExecutionConversation,
+} from '../../apps/worker/src';
 import {
   AttemptStatus,
   createOrGetInvocationJob,
@@ -10,7 +14,7 @@ import {
   releaseConversationClaim,
   tryClaimConversation,
 } from '../../packages/db/src';
-import { executeQueuedJob } from '../../apps/worker/src';
+import type { CliHarnessRequest } from '../../packages/runner-manager/src';
 
 const environment = getTestEnvironment();
 const prisma = createPrismaClient(environment.databaseUrl);
@@ -153,6 +157,103 @@ describe('worker execution integration', () => {
         redis,
         `${testPrefix}-conversation`,
         occupant,
+      ),
+    ).toBe(true);
+  });
+
+  test('dispatches GitHub Actions asynchronously and holds the conversation until callback release', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    let dispatchedExecutionId: string | undefined;
+
+    const result = await executeQueuedGitHubActionsJob(
+      {
+        jobId: created.job.id,
+        workerId: `${testPrefix}-worker`,
+        callbackTtlMilliseconds: 60_000,
+      },
+      {
+        prisma,
+        redis,
+        now: () => new Date('2026-10-20T00:00:00.000Z'),
+        githubActionsExecutor: {
+          start: async ({ executionId }) => {
+            dispatchedExecutionId = executionId;
+            return { executionRef: `github-actions:sandbox:${executionId}` };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 'dispatched',
+      executionRef: `github-actions:sandbox:${result.executionId}`,
+    });
+    expect(dispatchedExecutionId).toBe(result.executionId);
+    expect(
+      await prisma.job.findUniqueOrThrow({
+        where: { id: created.job.id },
+        select: { status: true, attempts: { select: { status: true } } },
+      }),
+    ).toEqual({
+      status: JobStatus.RUNNING,
+      attempts: [{ status: AttemptStatus.RUNNING }],
+    });
+    expect(
+      await tryClaimConversation(
+        redis,
+        `${testPrefix}-conversation`,
+        `${testPrefix}-next-worker`,
+      ),
+    ).toBe(false);
+    expect(
+      await releaseGitHubActionsExecutionConversation(
+        result.executionId ?? '',
+        { prisma, redis },
+      ),
+    ).toBe(true);
+    expect(
+      await tryClaimConversation(
+        redis,
+        `${testPrefix}-conversation`,
+        `${testPrefix}-next-worker`,
+      ),
+    ).toBe(true);
+  });
+
+  test('marks an execution failed and releases the conversation when dispatch fails', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+
+    const result = await executeQueuedGitHubActionsJob(
+      {
+        jobId: created.job.id,
+        workerId: `${testPrefix}-worker`,
+      },
+      {
+        prisma,
+        redis,
+        githubActionsExecutor: {
+          start: async () => {
+            throw new Error('simulated workflow dispatch failure');
+          },
+        },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    expect(
+      await prisma.execution.findUniqueOrThrow({
+        where: { id: result.executionId },
+        select: { status: true, reason: true },
+      }),
+    ).toEqual({
+      status: 'FAILED',
+      reason: 'GitHub Actions dispatch failed before the execution started',
+    });
+    expect(
+      await tryClaimConversation(
+        redis,
+        `${testPrefix}-conversation`,
+        `${testPrefix}-next-worker`,
       ),
     ).toBe(true);
   });

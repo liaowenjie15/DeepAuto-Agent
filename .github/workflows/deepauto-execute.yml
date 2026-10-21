@@ -1,0 +1,246 @@
+name: DeepAuto Execute
+
+on:
+  workflow_dispatch:
+    inputs:
+      execution_id:
+        description: DeepAuto execution identifier
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  execute:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DEEPAUTO_GATEWAY_URL: ${{ vars.DEEPAUTO_GATEWAY_URL }}
+      EXECUTION_ID: ${{ inputs.execution_id }}
+      DEEPAUTO_STATE_NAME: deepauto-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out sandbox repository without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap and run Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DEEPAUTO_GATEWAY_URL:-}"
+          [[ "$DEEPAUTO_GATEWAY_URL" == https://* ]]
+          DEEPAUTO_STATE_DIR="$RUNNER_TEMP/$DEEPAUTO_STATE_NAME"
+          mkdir -p "$DEEPAUTO_STATE_DIR"
+          chmod 700 "$DEEPAUTO_STATE_DIR"
+
+          oidc_response="$(curl --fail --silent --show-error \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=deepauto-actions")"
+          oidc_token="$(node -e '
+            const value = JSON.parse(process.argv[1]).value;
+            if (typeof value !== "string" || value.length === 0) process.exit(1);
+            process.stdout.write(value);
+          ' "$oidc_response")"
+
+          gateway_base="${DEEPAUTO_GATEWAY_URL%/}"
+          bootstrap_file="$DEEPAUTO_STATE_DIR/bootstrap.json"
+          session_file="$DEEPAUTO_STATE_DIR/session.json"
+          curl --fail --silent --show-error --output "$bootstrap_file" \
+            --header "Authorization: Bearer $oidc_token" \
+            --request POST \
+            "$gateway_base/github/actions/executions/${EXECUTION_ID}/bootstrap"
+          chmod 600 "$bootstrap_file"
+
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("node:fs");
+            const [bootstrapFile, stateDirectory] = process.argv.slice(1);
+            const bootstrap = JSON.parse(fs.readFileSync(bootstrapFile, "utf8"));
+            if (typeof bootstrap.attemptId !== "string" || typeof bootstrap.instruction !== "string") process.exit(1);
+            fs.writeFileSync(`${stateDirectory}/attempt-id`, bootstrap.attemptId, { mode: 0o600 });
+            fs.writeFileSync(`${stateDirectory}/instruction`, bootstrap.instruction, { mode: 0o600 });
+          ' "$bootstrap_file" "$DEEPAUTO_STATE_DIR"
+
+          curl --fail --silent --show-error --output "$session_file" \
+            --header "Authorization: Bearer $oidc_token" \
+            --request POST \
+            "$gateway_base/github/actions/executions/${EXECUTION_ID}/codex/session"
+          chmod 600 "$session_file"
+
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("node:fs");
+            const [sessionFile, stateDirectory] = process.argv.slice(1);
+            const session = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+            if (typeof session.baseUrl !== "string" || !session.baseUrl.startsWith("https://") || typeof session.accessToken !== "string" || session.accessToken.length === 0) process.exit(1);
+            fs.writeFileSync(`${stateDirectory}/proxy-url`, session.baseUrl, { mode: 0o600 });
+            fs.writeFileSync(`${stateDirectory}/proxy-token`, session.accessToken, { mode: 0o600 });
+          ' "$session_file" "$DEEPAUTO_STATE_DIR"
+
+          attempt_id="$(cat "$DEEPAUTO_STATE_DIR/attempt-id")"
+          events_file="$DEEPAUTO_STATE_DIR/events.jsonl"
+          append_event() {
+            # shellcheck disable=SC2016
+            node -e '
+              const fs = require("node:fs");
+              const [file, attemptId, type, value] = process.argv.slice(1);
+              const event = { type, attemptId };
+              if (type === "progress") event.message = value;
+              if (type === "artifact") {
+                const [name, artifactValue] = value.split("\t", 2);
+                event.name = name;
+                event.value = artifactValue;
+              }
+              if (type === "failed") event.reason = value;
+              fs.appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+            ' "$events_file" "$attempt_id" "$1" "${2:-}"
+          }
+          append_event started
+          append_event progress 'Codex CLI started in the isolated sandbox'
+
+          npm install --global @openai/codex@0.163.0 >/dev/null
+          codex_home="$DEEPAUTO_STATE_DIR/codex-home"
+          mkdir -p "$codex_home"
+          chmod 700 "$codex_home"
+          proxy_url="$(cat "$DEEPAUTO_STATE_DIR/proxy-url")"
+          cat > "$codex_home/config.toml" <<EOF
+          model_provider = "deepauto"
+
+          [model_providers.deepauto]
+          name = "DeepAuto execution proxy"
+          wire_api = "responses"
+          requires_openai_auth = false
+          base_url = "$proxy_url"
+          env_key = "DEEPAUTO_CODEX_PROXY_TOKEN"
+          EOF
+          chmod 600 "$codex_home/config.toml"
+
+          branch_suffix="$(printf '%s' "$EXECUTION_ID" | sha256sum | cut -c1-16)"
+          git switch --create "deepauto/execution-$branch_suffix"
+          prompt_file="$DEEPAUTO_STATE_DIR/prompt"
+          cat > "$prompt_file" <<'PROMPT'
+          Complete the requested code task in the current repository. Work only on the current branch.
+          Run the relevant project checks when practical. Do not commit, push, create a pull request,
+          read credentials, or change Git remotes; the workflow performs delivery after Codex exits.
+
+          Task:
+          PROMPT
+          cat "$DEEPAUTO_STATE_DIR/instruction" >> "$prompt_file"
+
+          set +e
+          DEEPAUTO_CODEX_PROXY_TOKEN="$(cat "$DEEPAUTO_STATE_DIR/proxy-token")" \
+            CODEX_HOME="$codex_home" \
+            codex exec --ignore-user-config --ephemeral --sandbox workspace-write \
+              --json --cd "$GITHUB_WORKSPACE" - < "$prompt_file" \
+              > "$DEEPAUTO_STATE_DIR/codex.jsonl"
+          codex_exit=$?
+          set -e
+          printf '%s' "$codex_exit" > "$DEEPAUTO_STATE_DIR/codex-exit"
+          chmod 600 "$DEEPAUTO_STATE_DIR/codex-exit" "$DEEPAUTO_STATE_DIR/codex.jsonl"
+          rm -f "$DEEPAUTO_STATE_DIR/proxy-token" "$DEEPAUTO_STATE_DIR/session.json" \
+            "$DEEPAUTO_STATE_DIR/bootstrap.json" "$DEEPAUTO_STATE_DIR/instruction" "$prompt_file"
+
+      - name: Deliver result and callback
+        if: ${{ always() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DEEPAUTO_STATE_DIR="$RUNNER_TEMP/$DEEPAUTO_STATE_NAME"
+          callback_status="FAILED"
+          callback_reason="Codex execution did not produce a result"
+          events_file="$DEEPAUTO_STATE_DIR/events.jsonl"
+          attempt_file="$DEEPAUTO_STATE_DIR/attempt-id"
+
+          append_event() {
+            # shellcheck disable=SC2016
+            node -e '
+              const fs = require("node:fs");
+              const [file, attemptId, type, value] = process.argv.slice(1);
+              const event = { type, attemptId };
+              if (type === "progress") event.message = value;
+              if (type === "artifact") {
+                const [name, artifactValue] = value.split("\t", 2);
+                event.name = name;
+                event.value = artifactValue;
+              }
+              if (type === "failed") event.reason = value;
+              fs.appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+            ' "$events_file" "$1" "$2" "${3:-}"
+          }
+
+          if [[ -f "$attempt_file" && -f "$DEEPAUTO_STATE_DIR/codex-exit" ]]; then
+            attempt_id="$(cat "$attempt_file")"
+            codex_exit="$(cat "$DEEPAUTO_STATE_DIR/codex-exit")"
+            if [[ "$codex_exit" -ne 0 ]]; then
+              callback_reason="Codex CLI failed before completing the execution"
+              append_event "$attempt_id" failed "$callback_reason"
+            elif [[ -z "$(git status --porcelain)" ]] && git diff --quiet "origin/$GITHUB_REF_NAME...HEAD"; then
+              append_event "$attempt_id" progress 'Codex completed without repository changes'
+              append_event "$attempt_id" completed
+              callback_status="COMPLETED"
+              callback_reason=""
+            else
+              branch_name="$(git branch --show-current)"
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              if [[ -n "$(git status --porcelain)" ]]; then
+                git add --all
+                git commit -m "DeepAuto execution $EXECUTION_ID"
+              fi
+              commit_sha="$(git rev-parse HEAD)"
+              # shellcheck disable=SC2016
+              git config credential.helper '!f() { echo username=x-access-token; echo password="$GH_TOKEN"; }; f'
+              if git push origin "$branch_name"; then
+                git config --unset-all credential.helper
+                append_event "$attempt_id" artifact "commit_sha\t$commit_sha"
+                if pr_url="$(gh pr create --base "$GITHUB_REF_NAME" --head "$branch_name" \
+                  --title "DeepAuto execution" --body "Created by DeepAuto execution $EXECUTION_ID")"; then
+                  append_event "$attempt_id" artifact "pull_request\t$pr_url"
+                  append_event "$attempt_id" completed
+                  callback_status="COMPLETED"
+                  callback_reason=""
+                else
+                  callback_reason="Pull request creation failed after the branch was pushed"
+                  append_event "$attempt_id" failed "$callback_reason"
+                fi
+              else
+                git config --unset-all credential.helper
+                callback_reason="Branch push failed after Codex completed"
+                append_event "$attempt_id" failed "$callback_reason"
+              fi
+            fi
+          fi
+
+          oidc_response="$(curl --fail --silent --show-error \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=deepauto-actions")"
+          oidc_token="$(node -e '
+            const value = JSON.parse(process.argv[1]).value;
+            if (typeof value !== "string" || value.length === 0) process.exit(1);
+            process.stdout.write(value);
+          ' "$oidc_response")"
+          # shellcheck disable=SC2016
+          callback_body="$(node -e '
+            const fs = require("node:fs");
+            const [status, reason, eventsFile] = process.argv.slice(1);
+            const events = fs.existsSync(eventsFile)
+              ? fs.readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+              : [];
+            const body = { status, events };
+            if (reason) body.reason = reason;
+            process.stdout.write(JSON.stringify(body));
+          ' "$callback_status" "$callback_reason" "$events_file")"
+          curl --fail --silent --show-error --output /dev/null \
+            --header "Authorization: Bearer $oidc_token" \
+            --header "Content-Type: application/json" \
+            --request POST \
+            --data "$callback_body" \
+            "${DEEPAUTO_GATEWAY_URL%/}/github/actions/executions/${EXECUTION_ID}/callback"
+          rm -rf "$DEEPAUTO_STATE_DIR"
+          [[ "$callback_status" == 'COMPLETED' ]]

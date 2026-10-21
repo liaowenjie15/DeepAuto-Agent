@@ -24,6 +24,11 @@ export {
   type GitHubActionsOidcTrustPolicy,
   verifyGitHubActionsOidcToken,
 } from './actions-oidc';
+export {
+  type ExecutionProxyTokenClaims,
+  issueExecutionProxyToken,
+  verifyExecutionProxyToken,
+} from './execution-proxy-token';
 
 const issueCommentSchema = z.object({
   action: z.literal('created'),

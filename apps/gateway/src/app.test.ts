@@ -102,8 +102,116 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
   });
 });
 
+test('issues a short-lived Codex proxy token without exposing the upstream credential', async () => {
+  const upstreamRequests: RequestInit[] = [];
+  let executionIsActive = true;
+  const now = new Date('2026-10-21T00:00:00.000Z');
+  const app = createGatewayApp({
+    prisma: {} as never,
+    githubWebhookSecret: 'secret',
+    githubWorkspaceId: 'workspace-1',
+    githubBotMention: '@deepauto',
+    now: () => now,
+    githubActions: {
+      oidcTrustPolicy: {
+        audience: 'deepauto-actions',
+        repository: 'liaowenjie15/deepauto-harness-sandbox',
+        workflowRef:
+          'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
+        ref: 'refs/heads/main',
+        eventName: 'workflow_dispatch',
+      },
+      verifyOidcToken: async () => ({
+        repository: 'liaowenjie15/deepauto-harness-sandbox',
+        workflow_ref:
+          'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
+        ref: 'refs/heads/main',
+        event_name: 'workflow_dispatch',
+        run_id: '123',
+      }),
+    },
+    codexProxy: {
+      publicBaseUrl: 'https://gateway.example.test/codex/proxy/v1',
+      upstreamResponsesUrl: 'https://api.example.test/v1/responses',
+      upstreamApiKey: 'upstream-api-key',
+      model: 'gpt-5-codex',
+      sessionTokenSecret:
+        'a-long-test-secret-that-is-at-least-thirty-two-characters',
+      fetch: async (_input, init) => {
+        upstreamRequests.push(init ?? {});
+        return new Response(JSON.stringify({ id: 'response-1' }), {
+          status: 200,
+        });
+      },
+    },
+    executionService: {
+      getActiveExecutionBootstrap: async (_prisma, executionId) =>
+        executionIsActive
+          ? {
+              executionId,
+              attemptId: 'attempt-1',
+              instruction: 'change before to after',
+            }
+          : null,
+      acceptExecutionCallbackByExecutionId: async () => ({ accepted: true }),
+    },
+  });
+
+  const sessionResponse = await app.request(
+    '/github/actions/executions/execution-1/codex/session',
+    {
+      method: 'POST',
+      headers: { authorization: 'Bearer oidc-token' },
+    },
+  );
+  const session = (await sessionResponse.json()) as Record<string, unknown>;
+
+  expect(sessionResponse.status).toBe(200);
+  expect(session).toMatchObject({
+    baseUrl: 'https://gateway.example.test/codex/proxy/v1',
+    expiresAt: '2026-10-21T00:05:00.000Z',
+  });
+  expect(session).not.toHaveProperty('instruction');
+  expect(session).not.toHaveProperty('upstreamApiKey');
+  expect(session.accessToken).toEqual(expect.any(String));
+
+  const proxyResponse = await app.request('/codex/proxy/v1/responses', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${session.accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ model: 'untrusted-model', input: 'do work' }),
+  });
+
+  expect(proxyResponse.status).toBe(200);
+  expect(await proxyResponse.json()).toEqual({ id: 'response-1' });
+  expect(upstreamRequests).toHaveLength(1);
+  expect(upstreamRequests[0]?.headers).toEqual({
+    authorization: 'Bearer upstream-api-key',
+    'content-type': 'application/json',
+  });
+  expect(JSON.parse(String(upstreamRequests[0]?.body))).toEqual({
+    model: 'gpt-5-codex',
+    input: 'do work',
+  });
+
+  executionIsActive = false;
+  const unavailableResponse = await app.request('/codex/proxy/v1/responses', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${session.accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ input: 'do work' }),
+  });
+  expect(unavailableResponse.status).toBe(403);
+  expect(upstreamRequests).toHaveLength(1);
+});
+
 test('accepts a terminal callback without exposing the callback claim', async () => {
   let callbackInput: Record<string, unknown> | undefined;
+  let releasedExecutionId: string | undefined;
   const app = createGatewayApp({
     prisma: {} as never,
     githubWebhookSecret: 'secret',
@@ -126,6 +234,9 @@ test('accepts a terminal callback without exposing the callback claim', async ()
         event_name: 'workflow_dispatch',
         run_id: '123',
       }),
+    },
+    onExecutionCallbackAccepted: async (executionId) => {
+      releasedExecutionId = executionId;
     },
     executionService: {
       getActiveExecutionBootstrap: async () => null,
@@ -161,4 +272,5 @@ test('accepts a terminal callback without exposing the callback claim', async ()
     status: 'COMPLETED',
   });
   expect(callbackInput).not.toHaveProperty('callbackClaimId');
+  expect(releasedExecutionId).toBe('execution-1');
 });
