@@ -10,6 +10,7 @@ node_modules
 dist
 coverage
 *.tsbuildinfo
+/.codex/tmp/
 
 # Prisma client is generated before build, typecheck, and integration tests.
 packages/db/src/generated/
