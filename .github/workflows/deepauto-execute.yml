@@ -8,15 +8,20 @@ on:
         required: true
         type: string
 
-permissions:
-  id-token: write
-  contents: write
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: deepauto-execution-${{ inputs.execution_id }}
+  cancel-in-progress: false
 
 jobs:
   execute:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
     env:
       DEEPAUTO_GATEWAY_URL: ${{ vars.DEEPAUTO_GATEWAY_URL }}
       EXECUTION_ID: ${{ inputs.execution_id }}
