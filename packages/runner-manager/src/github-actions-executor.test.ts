@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test';
 import {
   GitHubRequestError,
   type GitHubWorkflowDispatch,
+  type GitHubWorkflowRun,
 } from '@deepauto/github';
 import {
   type ExecutorStartError,
   GitHubActionsExecutor,
 } from './github-actions-executor';
 
-const workflowRun = {
+const workflowRun: GitHubWorkflowRun = {
   id: 41,
   status: 'in_progress',
   conclusion: null,
