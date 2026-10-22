@@ -2,6 +2,7 @@ import type { ExecutionEvent } from '@deepauto/contracts';
 import {
   AttemptStatus,
   ExecutionArtifactName,
+  ExecutionCancellationRequestStatus,
   ExecutionEventType,
   type ExecutionStatus,
   JobStatus,
@@ -172,6 +173,7 @@ export async function getActiveExecutionBootstrap(
       id: executionId,
       status: 'RUNNING',
       callbackClaim: { usedAt: null, expiresAt: { gt: now } },
+      cancellationRequest: { is: null },
       attempt: {
         status: AttemptStatus.RUNNING,
         job: { status: JobStatus.RUNNING, cancelledAt: null },
@@ -301,6 +303,15 @@ export async function acceptExecutionCallback(
     await transaction.execution.update({
       where: { id: execution.id },
       data: { status: input.status, reason: input.reason, finishedAt: now },
+    });
+    await transaction.executionCancellationRequest.updateMany({
+      where: { executionId: execution.id },
+      data: {
+        status:
+          input.status === 'CANCELLED'
+            ? ExecutionCancellationRequestStatus.COMPLETED
+            : ExecutionCancellationRequestStatus.SUPERSEDED,
+      },
     });
     await transaction.executionEvent.createMany({
       data: input.events.map((event, index) => ({

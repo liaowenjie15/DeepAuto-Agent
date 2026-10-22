@@ -37,6 +37,7 @@ export async function publishPendingOutboxEvents(
   const events = await prisma.outboxEvent.findMany({
     where: {
       publishedAt: null,
+      kind: 'JOB_ENQUEUE',
       jobId: jobIds ? { in: [...jobIds] } : undefined,
     },
     orderBy: { createdAt: 'asc' },
