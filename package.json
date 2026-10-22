@@ -20,6 +20,7 @@
     "typecheck": "bun run verify:targets && bun run db:generate && tsc -p scripts/tsconfig.json --noEmit && turbo typecheck",
     "test": "bun run test:unit",
     "test:unit": "bun run verify:targets && bun test scripts && turbo test:unit",
+    "check:workflow-boundary": "bun scripts/check-workflow-boundary.ts",
     "verify:targets": "bun scripts/check-validation-targets.ts",
     "db:generate": "bun run --cwd packages/db generate",
     "infra:test:up": "docker compose -f compose.test.yaml up -d --wait",
