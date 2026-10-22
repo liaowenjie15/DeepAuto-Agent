@@ -1,7 +1,9 @@
 import {
   AttemptStatus,
+  ExecutionStatus,
   type JobAttempt,
   JobStatus,
+  OutboxEventKind,
   type PrismaClient,
 } from './generated/prisma/client';
 
@@ -13,6 +15,18 @@ export type TerminalAttemptStatus =
 export type AttemptCompletion = {
   accepted: boolean;
   shouldNotify: boolean;
+};
+
+export type RequestJobCancellationInput = {
+  jobId: string;
+  requestedByActorId: string;
+  now?: Date;
+};
+
+export type JobCancellationRequestResult = {
+  accepted: boolean;
+  state: 'cancelled' | 'requested' | 'already_requested' | 'not_cancellable';
+  executionId?: string;
 };
 
 const jobStatusForAttemptStatus = {
@@ -128,51 +142,109 @@ export async function requeueFailedJob(
 
 export async function requestJobCancellation(
   prisma: PrismaClient,
-  jobId: string,
-): Promise<boolean> {
+  input: RequestJobCancellationInput,
+): Promise<JobCancellationRequestResult> {
   return prisma.$transaction(async (transaction) => {
-    const cancelledAt = new Date();
+    const now = input.now ?? new Date();
     const job = await transaction.job.findUnique({
-      where: { id: jobId },
-      select: { currentAttemptNumber: true },
+      where: { id: input.jobId },
+      select: { currentAttemptNumber: true, status: true },
     });
 
-    if (!job) return false;
+    if (!job) return { accepted: false, state: 'not_cancellable' };
 
-    const cancelled = await transaction.job.updateMany({
+    if (job.status === JobStatus.QUEUED) {
+      const cancelled = await transaction.job.updateMany({
+        where: { id: input.jobId, status: JobStatus.QUEUED },
+        data: { status: JobStatus.CANCELLED, cancelledAt: now },
+      });
+      return cancelled.count === 1
+        ? { accepted: true, state: 'cancelled' }
+        : { accepted: false, state: 'not_cancellable' };
+    }
+
+    if (job.status !== JobStatus.RUNNING) {
+      return { accepted: false, state: 'not_cancellable' };
+    }
+
+    const claimedRunningJob = await transaction.job.updateMany({
       where: {
-        id: jobId,
-        status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] },
+        id: input.jobId,
+        status: JobStatus.RUNNING,
+        currentAttemptNumber: job.currentAttemptNumber,
       },
+      data: { updatedAt: now },
+    });
+    if (claimedRunningJob.count !== 1) {
+      return { accepted: false, state: 'not_cancellable' };
+    }
+
+    const execution = await transaction.execution.findFirst({
+      where: {
+        status: ExecutionStatus.RUNNING,
+        attempt: {
+          jobId: input.jobId,
+          number: job.currentAttemptNumber,
+          status: AttemptStatus.RUNNING,
+        },
+      },
+      select: { id: true },
+    });
+
+    if (!execution) {
+      const cancelled = await transaction.job.updateMany({
+        where: {
+          id: input.jobId,
+          status: JobStatus.RUNNING,
+          currentAttemptNumber: job.currentAttemptNumber,
+        },
+        data: { status: JobStatus.CANCELLED, cancelledAt: now },
+      });
+      if (cancelled.count !== 1) {
+        return { accepted: false, state: 'not_cancellable' };
+      }
+
+      await transaction.jobAttempt.updateMany({
+        where: {
+          jobId: input.jobId,
+          number: job.currentAttemptNumber,
+          status: AttemptStatus.RUNNING,
+        },
+        data: { status: AttemptStatus.CANCELLED, finishedAt: now },
+      });
+      return { accepted: true, state: 'cancelled' };
+    }
+
+    const existingRequest =
+      await transaction.executionCancellationRequest.findUnique({
+        where: { executionId: execution.id },
+        select: { id: true },
+      });
+    if (existingRequest) {
+      return {
+        accepted: true,
+        state: 'already_requested',
+        executionId: execution.id,
+      };
+    }
+
+    await transaction.executionCancellationRequest.create({
       data: {
-        status: JobStatus.CANCELLED,
-        cancelledAt,
+        executionId: execution.id,
+        requestedAt: now,
+        requestedByActorId: input.requestedByActorId,
       },
     });
-
-    if (cancelled.count === 0) return false;
-
-    await transaction.jobAttempt.updateMany({
-      where: {
-        jobId,
-        number: job.currentAttemptNumber,
-        status: AttemptStatus.RUNNING,
-      },
-      data: { status: AttemptStatus.CANCELLED, finishedAt: cancelledAt },
-    });
-    await transaction.execution.updateMany({
-      where: {
-        attempt: { jobId, number: job.currentAttemptNumber },
-        status: 'RUNNING',
-      },
+    await transaction.outboxEvent.create({
       data: {
-        status: 'CANCELLED',
-        reason: 'Job cancellation requested',
-        finishedAt: cancelledAt,
+        jobId: input.jobId,
+        kind: OutboxEventKind.EXECUTION_CANCEL,
+        queueSequence: job.currentAttemptNumber,
+        dedupeKey: `execution:${execution.id}:cancel`,
       },
     });
 
-    return true;
+    return { accepted: true, state: 'requested', executionId: execution.id };
   });
 }
 
@@ -185,6 +257,10 @@ export async function recoverExpiredJobAttempts(
       status: AttemptStatus.RUNNING,
       startedAt: { lt: expiredBefore },
       job: { status: JobStatus.RUNNING, cancelledAt: null },
+      OR: [
+        { execution: { is: null } },
+        { execution: { is: { cancellationRequest: { is: null } } } },
+      ],
     },
     select: { id: true, jobId: true, number: true },
   });

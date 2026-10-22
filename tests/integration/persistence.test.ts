@@ -18,6 +18,7 @@ import {
   getTestEnvironment,
   issueCredentialClaim,
   JobStatus,
+  OutboxEventKind,
   publishPendingOutboxEvents,
   recoverExpiredJobAttempts,
   requeueFailedJob,
@@ -184,6 +185,33 @@ describe('persistence and queue integration', () => {
     ).toBe(1);
   });
 
+  test('cancels a queued Job without creating a control Outbox event', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+
+    expect(
+      await requestJobCancellation(prisma, {
+        jobId: created.job.id,
+        requestedByActorId: 'user-1',
+        now: new Date('2026-10-20T00:00:00.000Z'),
+      }),
+    ).toEqual({ accepted: true, state: 'cancelled' });
+    expect(
+      await prisma.job.findUniqueOrThrow({
+        where: { id: created.job.id },
+        select: { status: true, cancelledAt: true },
+      }),
+    ).toEqual({
+      status: JobStatus.CANCELLED,
+      cancelledAt: new Date('2026-10-20T00:00:00.000Z'),
+    });
+    expect(
+      await prisma.outboxEvent.count({
+        where: { jobId: created.job.id, kind: OutboxEventKind.EXECUTION_CANCEL },
+      }),
+    ).toBe(0);
+    expect(await beginJobAttempt(prisma, created.job.id)).toBeNull();
+  });
+
   test('deduplicates BullMQ enqueueing by the persisted Job ID', async () => {
     const created = await createOrGetInvocationJob(prisma, input());
     const queue = createTestQueue(`${testPrefix}-queue`);
@@ -293,6 +321,45 @@ describe('persistence and queue integration', () => {
     });
   });
 
+  test('does not recover a running execution while cancellation is requested', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    const attempt = await beginJobAttempt(prisma, created.job.id);
+    const execution = await startExecution(
+      prisma,
+      {
+        attemptId: attempt?.id ?? '',
+        callbackExpiresAt: new Date('2026-10-21T00:00:00.000Z'),
+      },
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+    await prisma.jobAttempt.update({
+      where: { id: attempt?.id },
+      data: { startedAt: new Date('2026-10-19T00:00:00.000Z') },
+    });
+
+    await requestJobCancellation(prisma, {
+      jobId: created.job.id,
+      requestedByActorId: 'user-1',
+      now: new Date('2026-10-20T00:01:00.000Z'),
+    });
+
+    expect(
+      await recoverExpiredJobAttempts(
+        prisma,
+        new Date('2026-10-20T00:02:00.000Z'),
+      ),
+    ).toEqual([]);
+    expect(
+      await prisma.execution.findUniqueOrThrow({
+        where: { id: execution.id },
+        select: { status: true, cancellationRequest: { select: { status: true } } },
+      }),
+    ).toEqual({
+      status: 'RUNNING',
+      cancellationRequest: { status: 'REQUESTED' },
+    });
+  });
+
   test('accepts one terminal callback and does not notify twice', async () => {
     const created = await createOrGetInvocationJob(prisma, input());
     const attempt = await beginJobAttempt(prisma, created.job.id);
@@ -362,10 +429,15 @@ describe('persistence and queue integration', () => {
     const attempt = await beginJobAttempt(prisma, first.job.id);
 
     expect(attempt).not.toBeNull();
-    const [cancelled, completed] = await Promise.all([
-      requestJobCancellation(prisma, first.job.id),
+    const [cancellation, completed] = await Promise.all([
+      requestJobCancellation(prisma, {
+        jobId: first.job.id,
+        requestedByActorId: 'user-1',
+      }),
       finishJobAttempt(prisma, attempt?.id ?? '', AttemptStatus.COMPLETED),
     ]);
+    const cancelled =
+      cancellation.accepted && cancellation.state === 'cancelled';
 
     expect(Number(cancelled) + Number(completed.accepted)).toBe(1);
     expect(
@@ -741,7 +813,7 @@ describe('persistence and queue integration', () => {
     ).toEqual({ status: AttemptStatus.RUNNING });
   });
 
-  test('cancellation invalidates a running execution callback without consuming its claim', async () => {
+  test('records one running-execution cancellation intent without invalidating its callback', async () => {
     const created = await createOrGetInvocationJob(prisma, input());
     const attempt = await beginJobAttempt(prisma, created.job.id);
     const execution = await startExecution(
@@ -753,7 +825,71 @@ describe('persistence and queue integration', () => {
       new Date('2026-10-20T00:00:00.000Z'),
     );
 
-    expect(await requestJobCancellation(prisma, created.job.id)).toBe(true);
+    expect(
+      await requestJobCancellation(prisma, {
+        jobId: created.job.id,
+        requestedByActorId: 'user-1',
+        now: new Date('2026-10-20T00:01:00.000Z'),
+      }),
+    ).toEqual({
+      accepted: true,
+      state: 'requested',
+      executionId: execution.id,
+    });
+    expect(
+      await requestJobCancellation(prisma, {
+        jobId: created.job.id,
+        requestedByActorId: 'user-1',
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+    ).toEqual({
+      accepted: true,
+      state: 'already_requested',
+      executionId: execution.id,
+    });
+    expect(
+      await prisma.execution.findUniqueOrThrow({
+        where: { id: execution.id },
+        select: {
+          status: true,
+          callbackClaim: { select: { usedAt: true } },
+          cancellationRequest: {
+            select: { requestedByActorId: true, status: true },
+          },
+        },
+      }),
+    ).toEqual({
+      status: 'RUNNING',
+      callbackClaim: { usedAt: null },
+      cancellationRequest: {
+        requestedByActorId: 'user-1',
+        status: 'REQUESTED',
+      },
+    });
+    expect(
+      await prisma.outboxEvent.count({
+        where: {
+          jobId: created.job.id,
+          kind: OutboxEventKind.EXECUTION_CANCEL,
+          publishedAt: null,
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await getActiveExecutionBootstrap(
+        prisma,
+        execution.id,
+        new Date('2026-10-20T00:01:00.000Z'),
+      ),
+    ).toBeNull();
+    await prisma.outboxEvent.updateMany({
+      where: { jobId: created.job.id, kind: OutboxEventKind.JOB_ENQUEUE },
+      data: { publishedAt: new Date('2026-10-20T00:02:00.000Z') },
+    });
+    const unavailableQueue: JobEnqueuer = {
+      add: () => Promise.reject(new Error('control events must not use execute')),
+    };
+    expect(await publishPendingOutboxEvents(prisma, unavailableQueue)).toBe(0);
     expect(
       await acceptExecutionCallback(prisma, {
         attemptId: attempt?.id ?? '',
@@ -762,18 +898,120 @@ describe('persistence and queue integration', () => {
         events: completedExecutionEvents(attempt?.id ?? ''),
         now: new Date('2026-10-20T00:01:00.000Z'),
       }),
-    ).toEqual({ accepted: false });
+    ).toEqual({ accepted: true });
     expect(
       await prisma.execution.findUniqueOrThrow({
         where: { id: execution.id },
         select: {
           status: true,
           callbackClaim: { select: { usedAt: true } },
+          cancellationRequest: { select: { status: true } },
         },
       }),
     ).toEqual({
-      status: 'CANCELLED',
-      callbackClaim: { usedAt: null },
+      status: 'COMPLETED',
+      callbackClaim: { usedAt: new Date('2026-10-20T00:01:00.000Z') },
+      cancellationRequest: { status: 'SUPERSEDED' },
+    });
+  });
+
+  test('confirms a cancellation intent only when the execution callback is cancelled', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    const attempt = await beginJobAttempt(prisma, created.job.id);
+    const execution = await startExecution(
+      prisma,
+      {
+        attemptId: attempt?.id ?? '',
+        callbackExpiresAt: new Date('2026-10-20T01:00:00.000Z'),
+      },
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+
+    await requestJobCancellation(prisma, {
+      jobId: created.job.id,
+      requestedByActorId: 'user-1',
+      now: new Date('2026-10-20T00:01:00.000Z'),
+    });
+    expect(
+      await acceptExecutionCallback(prisma, {
+        attemptId: attempt?.id ?? '',
+        callbackClaimId: execution.callbackClaim?.id ?? '',
+        status: 'CANCELLED',
+        events: [{ type: 'started', attemptId: attempt?.id ?? '' }],
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+    ).toEqual({ accepted: true });
+    expect(
+      await prisma.job.findUniqueOrThrow({
+        where: { id: created.job.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: JobStatus.CANCELLED });
+    expect(
+      await prisma.executionCancellationRequest.findUniqueOrThrow({
+        where: { executionId: execution.id },
+        select: { status: true },
+      }),
+    ).toEqual({ status: 'COMPLETED' });
+  });
+
+  test('accepts only one callback terminal after a cancellation intent', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    const attempt = await beginJobAttempt(prisma, created.job.id);
+    const execution = await startExecution(
+      prisma,
+      {
+        attemptId: attempt?.id ?? '',
+        callbackExpiresAt: new Date('2026-10-20T01:00:00.000Z'),
+      },
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+
+    await requestJobCancellation(prisma, {
+      jobId: created.job.id,
+      requestedByActorId: 'user-1',
+      now: new Date('2026-10-20T00:01:00.000Z'),
+    });
+
+    const callbacks = await Promise.all([
+      acceptExecutionCallback(prisma, {
+        attemptId: attempt?.id ?? '',
+        callbackClaimId: execution.callbackClaim?.id ?? '',
+        status: 'COMPLETED',
+        events: completedExecutionEvents(attempt?.id ?? ''),
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+      acceptExecutionCallback(prisma, {
+        attemptId: attempt?.id ?? '',
+        callbackClaimId: execution.callbackClaim?.id ?? '',
+        status: 'FAILED',
+        reason: 'Runner failed after cancellation was requested',
+        events: [{ type: 'started', attemptId: attempt?.id ?? '' }],
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+      acceptExecutionCallback(prisma, {
+        attemptId: attempt?.id ?? '',
+        callbackClaimId: execution.callbackClaim?.id ?? '',
+        status: 'CANCELLED',
+        events: [{ type: 'started', attemptId: attempt?.id ?? '' }],
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+    ]);
+
+    expect(callbacks.filter((callback) => callback.accepted)).toHaveLength(1);
+    expect(
+      await prisma.execution.findUniqueOrThrow({
+        where: { id: execution.id },
+        select: { status: true, cancellationRequest: { select: { status: true } } },
+      }),
+    ).toSatisfy((storedExecution) => {
+      if (storedExecution.status === 'CANCELLED') {
+        return storedExecution.cancellationRequest?.status === 'COMPLETED';
+      }
+      return (
+        ['COMPLETED', 'FAILED'].includes(storedExecution.status) &&
+        storedExecution.cancellationRequest?.status === 'SUPERSEDED'
+      );
     });
   });
 

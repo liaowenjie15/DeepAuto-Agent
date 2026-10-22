@@ -36,6 +36,15 @@ enum AttemptStatus {
 
 enum OutboxEventKind {
   JOB_ENQUEUE
+  EXECUTION_CANCEL
+}
+
+enum ExecutionCancellationRequestStatus {
+  REQUESTED
+  DISPATCHED
+  FAILED
+  COMPLETED
+  SUPERSEDED
 }
 
 enum MemberRole {
@@ -167,8 +176,23 @@ model Execution {
   events        ExecutionEvent[]
   artifacts     ExecutionArtifact[]
   callbackClaim ExecutionCallbackClaim?
+  cancellationRequest ExecutionCancellationRequest?
 
   @@index([status, startedAt])
+}
+
+model ExecutionCancellationRequest {
+  id                 String                             @id @default(cuid())
+  executionId        String                             @unique
+  requestedAt        DateTime                           @default(now())
+  requestedByActorId String
+  status             ExecutionCancellationRequestStatus @default(REQUESTED)
+  attemptCount       Int                                @default(0)
+  lastError          String?
+  lastAttemptAt      DateTime?
+  execution          Execution                          @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([status, requestedAt])
 }
 
 model ExecutionEvent {
@@ -216,7 +240,7 @@ model OutboxEvent {
   publishedAt   DateTime?
   job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  @@unique([jobId, queueSequence])
+  @@unique([jobId, kind, queueSequence])
   @@index([publishedAt, createdAt])
 }
 
