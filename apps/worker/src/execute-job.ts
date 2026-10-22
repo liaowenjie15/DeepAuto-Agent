@@ -2,6 +2,7 @@ import {
   acceptExecutionCallback,
   beginJobAttempt,
   type ExecutionStatus,
+  isJobAtConversationHead,
   type PrismaClient,
   releaseConversationClaim,
   startExecution,
@@ -126,6 +127,16 @@ export async function executeQueuedJob(
   if (!ownsConversation) return { status: 'deferred' };
 
   try {
+    if (
+      !(await isJobAtConversationHead(
+        dependencies.prisma,
+        input.jobId,
+        job.conversationKey,
+      ))
+    ) {
+      return { status: 'deferred' };
+    }
+
     const attempt = await beginJobAttempt(dependencies.prisma, input.jobId);
     if (!attempt) return { status: 'skipped' };
 
@@ -217,6 +228,16 @@ export async function executeQueuedGitHubActionsJob(
   let conversationOwner = input.workerId;
   let releaseConversation = true;
   try {
+    if (
+      !(await isJobAtConversationHead(
+        dependencies.prisma,
+        input.jobId,
+        job.conversationKey,
+      ))
+    ) {
+      return { status: 'deferred' };
+    }
+
     const attempt = await beginJobAttempt(dependencies.prisma, input.jobId);
     if (!attempt) return { status: 'skipped' };
 
