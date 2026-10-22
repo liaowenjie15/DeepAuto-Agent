@@ -1,8 +1,8 @@
 import type { ExecutionEvent } from '@deepauto/contracts';
 import {
   AttemptStatus,
-  ExecutionCancellationRequestStatus,
   ExecutionArtifactName,
+  ExecutionCancellationRequestStatus,
   ExecutionEventType,
   type ExecutionStatus,
   JobStatus,
