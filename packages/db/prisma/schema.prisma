@@ -167,6 +167,8 @@ model Execution {
   id            String          @id @default(cuid())
   attemptId     String          @unique
   status        ExecutionStatus @default(RUNNING)
+  externalRunId BigInt?         @unique
+  externalUrl   String?
   reason        String?
   startedAt     DateTime        @default(now())
   finishedAt    DateTime?

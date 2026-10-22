@@ -24,6 +24,7 @@ export {
   type GitHubWorkflowRun,
   type GitHubWorkflowRunCancellation,
   type GitHubWorkflowRunLookup,
+  getGitHubWorkflowRun,
   isRetryableGitHubRequestError,
 } from './actions';
 export {

@@ -1,30 +1,35 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { ExecutionEvent } from '../../packages/contracts/src';
 import {
-  acceptExecutionCallbackByExecutionId,
-  acceptExecutionCallback,
   AttemptStatus,
+  acceptExecutionCallback,
+  acceptExecutionCallbackByExecutionId,
   authorizeInboundInvocation,
   beginJobAttempt,
-  type JobEnqueuer,
+  CredentialProvider,
+  consumeCredentialClaim,
   createJobQueue,
   createOrGetInvocationJob,
   createPrismaClient,
   createRedisConnection,
-  CredentialProvider,
+  type ExecutionControlEnqueuer,
   enqueueJob,
   finishJobAttempt,
   getActiveExecutionBootstrap,
+  getExecutionCancellationControl,
   getTestEnvironment,
   issueCredentialClaim,
+  type JobEnqueuer,
   JobStatus,
   OutboxEventKind,
+  publishPendingExecutionControlEvents,
   publishPendingOutboxEvents,
+  recordExecutionCancellationAttempt,
+  recordExternalExecutionTerminalStatus,
   recoverExpiredJobAttempts,
-  requeueFailedJob,
   releaseConversationClaim,
   requestJobCancellation,
-  consumeCredentialClaim,
+  requeueFailedJob,
   startExecution,
   tryClaimConversation,
 } from '../../packages/db/src';
@@ -206,7 +211,10 @@ describe('persistence and queue integration', () => {
     });
     expect(
       await prisma.outboxEvent.count({
-        where: { jobId: created.job.id, kind: OutboxEventKind.EXECUTION_CANCEL },
+        where: {
+          jobId: created.job.id,
+          kind: OutboxEventKind.EXECUTION_CANCEL,
+        },
       }),
     ).toBe(0);
     expect(await beginJobAttempt(prisma, created.job.id)).toBeNull();
@@ -352,7 +360,10 @@ describe('persistence and queue integration', () => {
     expect(
       await prisma.execution.findUniqueOrThrow({
         where: { id: execution.id },
-        select: { status: true, cancellationRequest: { select: { status: true } } },
+        select: {
+          status: true,
+          cancellationRequest: { select: { status: true } },
+        },
       }),
     ).toEqual({
       status: 'RUNNING',
@@ -891,7 +902,8 @@ describe('persistence and queue integration', () => {
       data: { publishedAt: new Date('2026-10-20T00:02:00.000Z') },
     });
     const unavailableQueue: JobEnqueuer = {
-      add: () => Promise.reject(new Error('control events must not use execute')),
+      add: () =>
+        Promise.reject(new Error('control events must not use execute')),
     };
     expect(
       await publishPendingOutboxEvents(prisma, unavailableQueue, 100, [
@@ -920,6 +932,96 @@ describe('persistence and queue integration', () => {
       status: 'COMPLETED',
       callbackClaim: { usedAt: new Date('2026-10-20T00:01:00.000Z') },
       cancellationRequest: { status: 'SUPERSEDED' },
+    });
+  });
+
+  test('publishes cancellation control work and records the verified external terminal state', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    const attempt = await beginJobAttempt(prisma, created.job.id);
+    const execution = await startExecution(
+      prisma,
+      {
+        attemptId: attempt?.id ?? '',
+        callbackExpiresAt: new Date('2026-10-20T01:00:00.000Z'),
+      },
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+    await requestJobCancellation(prisma, {
+      jobId: created.job.id,
+      requestedByActorId: 'user-1',
+      now: new Date('2026-10-20T00:01:00.000Z'),
+    });
+
+    const published: Array<{
+      name: string;
+      data: { outboxEventId: string };
+      jobId: string;
+    }> = [];
+    const controlQueue: ExecutionControlEnqueuer = {
+      add: async (name, data, options) => {
+        published.push({ name, data, jobId: options.jobId });
+      },
+    };
+    expect(
+      await publishPendingExecutionControlEvents(prisma, controlQueue),
+    ).toBe(1);
+    expect(
+      await publishPendingExecutionControlEvents(prisma, controlQueue),
+    ).toBe(0);
+    expect(published).toEqual([
+      {
+        name: 'execution-cancel',
+        data: { outboxEventId: expect.any(String) },
+        jobId: expect.stringMatching(/^execution-control:/),
+      },
+    ]);
+
+    const control = await getExecutionCancellationControl(
+      prisma,
+      published[0]?.data.outboxEventId ?? '',
+    );
+    expect(control).toMatchObject({
+      executionId: execution.id,
+      attemptCount: 0,
+      status: 'REQUESTED',
+      externalRunId: null,
+    });
+    expect(
+      await recordExecutionCancellationAttempt(prisma, {
+        cancellationRequestId: control?.cancellationRequestId ?? '',
+        executionId: execution.id,
+        status: 'DISPATCHED',
+        externalRunId: 42n,
+        externalUrl: 'https://github.com/example/repository/actions/runs/42',
+        lastError: null,
+        now: new Date('2026-10-20T00:02:00.000Z'),
+      }),
+    ).toBe(true);
+    expect(
+      await recordExternalExecutionTerminalStatus(prisma, {
+        executionId: execution.id,
+        status: 'CANCELLED',
+        reason: 'GitHub Actions status reconciliation observed CANCELLED',
+        now: new Date('2026-10-20T00:03:00.000Z'),
+      }),
+    ).toBe(true);
+    expect(
+      await prisma.execution.findUniqueOrThrow({
+        where: { id: execution.id },
+        select: {
+          status: true,
+          externalRunId: true,
+          externalUrl: true,
+          callbackClaim: { select: { usedAt: true } },
+          cancellationRequest: { select: { status: true, attemptCount: true } },
+        },
+      }),
+    ).toEqual({
+      status: 'CANCELLED',
+      externalRunId: 42n,
+      externalUrl: 'https://github.com/example/repository/actions/runs/42',
+      callbackClaim: { usedAt: new Date('2026-10-20T00:03:00.000Z') },
+      cancellationRequest: { status: 'COMPLETED', attemptCount: 1 },
     });
   });
 
@@ -1010,7 +1112,10 @@ describe('persistence and queue integration', () => {
     expect(
       await prisma.execution.findUniqueOrThrow({
         where: { id: execution.id },
-        select: { status: true, cancellationRequest: { select: { status: true } } },
+        select: {
+          status: true,
+          cancellationRequest: { select: { status: true } },
+        },
       }),
     ).toSatisfy((storedExecution) => {
       if (storedExecution.status === 'CANCELLED') {

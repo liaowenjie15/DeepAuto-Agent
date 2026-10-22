@@ -6,6 +6,7 @@ import {
   dispatchGitHubWorkflow,
   findGitHubWorkflowRun,
   type GitHubFetch,
+  getGitHubWorkflowRun,
   isRetryableGitHubRequestError,
 } from './actions';
 
@@ -168,6 +169,39 @@ test('cancels a supplied workflow run ID', async () => {
       }),
     },
   });
+});
+
+test('gets one workflow run by its persisted ID', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const request: GitHubFetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return Response.json({
+      id: 43,
+      status: 'in_progress',
+      conclusion: null,
+      display_title: 'DeepAuto execution execution-1',
+      html_url: 'https://github.com/example/repository/actions/runs/43',
+    });
+  };
+
+  await expect(
+    getGitHubWorkflowRun(
+      'installation-token',
+      {
+        repository: 'liaowenjie15/deepauto-harness-sandbox',
+        runId: 43,
+      },
+      { fetch: request },
+    ),
+  ).resolves.toEqual({
+    id: 43,
+    status: 'in_progress',
+    conclusion: null,
+    url: 'https://github.com/example/repository/actions/runs/43',
+  });
+  expect(requests[0]?.url).toBe(
+    'https://api.github.com/repos/liaowenjie15/deepauto-harness-sandbox/actions/runs/43',
+  );
 });
 
 test('rejects malformed repository names before an API request', async () => {

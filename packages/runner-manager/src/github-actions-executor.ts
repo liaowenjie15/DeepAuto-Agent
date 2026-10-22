@@ -17,6 +17,7 @@ const githubActionsExecutorConfigSchema = z.object({
 
 const githubActionsExecutionRequestSchema = z.object({
   executionId: z.string().trim().min(1),
+  externalRunId: z.bigint().positive().optional(),
 });
 
 export type GitHubActionsExecutorConfig = z.input<
@@ -43,6 +44,7 @@ export type ExecutorExecutionState =
 export type ExecutorExecutionStatus = {
   executionRef: string;
   state: ExecutorExecutionState;
+  externalRunId?: bigint;
   externalUrl?: string;
 };
 
@@ -107,6 +109,14 @@ function executionStateForWorkflowRun(
   return 'unknown';
 }
 
+function toGitHubRunId(externalRunId: bigint): number {
+  const runId = Number(externalRunId);
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
+    throw new Error('GitHub workflow run ID must be a safe positive integer');
+  }
+  return runId;
+}
+
 export class GitHubActionsExecutor implements ExecutorAdapter {
   readonly #configuration: z.infer<typeof githubActionsExecutorConfigSchema>;
 
@@ -146,17 +156,23 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
     request: GitHubActionsExecutionRequest,
   ): Promise<ExecutorExecutionStatus> {
     const parsedRequest = githubActionsExecutionRequestSchema.parse(request);
-    const workflowRun = await this.controller.findRun({
-      repository: this.#configuration.repository,
-      workflow: this.#configuration.workflow,
-      executionId: parsedRequest.executionId,
-    });
+    const workflowRun = parsedRequest.externalRunId
+      ? await this.controller.getRun({
+          repository: this.#configuration.repository,
+          runId: toGitHubRunId(parsedRequest.externalRunId),
+        })
+      : await this.controller.findRun({
+          repository: this.#configuration.repository,
+          workflow: this.#configuration.workflow,
+          executionId: parsedRequest.executionId,
+        });
     return {
       executionRef: executionRef(
         this.#configuration.repository,
         parsedRequest.executionId,
       ),
       state: executionStateForWorkflowRun(workflowRun),
+      externalRunId: workflowRun ? BigInt(workflowRun.id) : undefined,
       externalUrl: workflowRun?.url,
     };
   }
@@ -165,11 +181,16 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
     request: GitHubActionsExecutionRequest,
   ): Promise<ExecutorExecutionStatus> {
     const parsedRequest = githubActionsExecutionRequestSchema.parse(request);
-    const workflowRun = await this.controller.findRun({
-      repository: this.#configuration.repository,
-      workflow: this.#configuration.workflow,
-      executionId: parsedRequest.executionId,
-    });
+    const workflowRun = parsedRequest.externalRunId
+      ? await this.controller.getRun({
+          repository: this.#configuration.repository,
+          runId: toGitHubRunId(parsedRequest.externalRunId),
+        })
+      : await this.controller.findRun({
+          repository: this.#configuration.repository,
+          workflow: this.#configuration.workflow,
+          executionId: parsedRequest.executionId,
+        });
     const state = executionStateForWorkflowRun(workflowRun);
     if (!workflowRun || (state !== 'queued' && state !== 'running')) {
       return {
@@ -178,6 +199,7 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
           parsedRequest.executionId,
         ),
         state,
+        externalRunId: workflowRun ? BigInt(workflowRun.id) : undefined,
         externalUrl: workflowRun?.url,
       };
     }
@@ -192,6 +214,7 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
         parsedRequest.executionId,
       ),
       state: 'cancelling',
+      externalRunId: BigInt(workflowRun.id),
       externalUrl: workflowRun.url,
     };
   }
