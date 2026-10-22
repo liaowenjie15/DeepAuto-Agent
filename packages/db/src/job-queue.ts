@@ -1,6 +1,6 @@
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { OutboxEventKind, type PrismaClient } from './generated/prisma/client';
+import type { PrismaClient } from './generated/prisma/client';
 
 export type JobQueue = Queue<{ jobId: string }>;
 
@@ -37,7 +37,7 @@ export async function publishPendingOutboxEvents(
   const events = await prisma.outboxEvent.findMany({
     where: {
       publishedAt: null,
-      kind: OutboxEventKind.JOB_ENQUEUE,
+      kind: 'JOB_ENQUEUE',
       jobId: jobIds ? { in: [...jobIds] } : undefined,
     },
     orderBy: { createdAt: 'asc' },

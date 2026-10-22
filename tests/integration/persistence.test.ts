@@ -824,6 +824,10 @@ describe('persistence and queue integration', () => {
       },
       new Date('2026-10-20T00:00:00.000Z'),
     );
+    const executionQueueOutbox = await prisma.outboxEvent.findUniqueOrThrow({
+      where: { dedupeKey: `job:${created.job.id}:enqueue` },
+      select: { id: true },
+    });
 
     expect(
       await requestJobCancellation(prisma, {
@@ -883,7 +887,7 @@ describe('persistence and queue integration', () => {
       ),
     ).toBeNull();
     await prisma.outboxEvent.updateMany({
-      where: { jobId: created.job.id, kind: OutboxEventKind.JOB_ENQUEUE },
+      where: { id: executionQueueOutbox.id },
       data: { publishedAt: new Date('2026-10-20T00:02:00.000Z') },
     });
     const unavailableQueue: JobEnqueuer = {
