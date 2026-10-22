@@ -26,8 +26,41 @@ const workflowDispatchSchema = z.object({
   inputs: z.record(z.string(), z.string()).default({}),
 });
 
+const workflowRunLookupSchema = z.object({
+  repository: repositorySchema,
+  workflow: z.string().trim().min(1),
+  executionId: z.string().trim().min(1),
+});
+
+const workflowRunCancellationSchema = z.object({
+  repository: repositorySchema,
+  runId: z.number().int().positive(),
+});
+
+const workflowRunsResponseSchema = z.object({
+  workflow_runs: z.array(
+    z.object({
+      id: z.number().int().positive(),
+      status: z.string().trim().min(1),
+      conclusion: z.string().trim().min(1).nullable(),
+      display_title: z.string().trim().min(1),
+      html_url: z.url(),
+    }),
+  ),
+});
+
 export type GitHubAppCredentials = z.infer<typeof appCredentialsSchema>;
 export type GitHubWorkflowDispatch = z.input<typeof workflowDispatchSchema>;
+export type GitHubWorkflowRunLookup = z.input<typeof workflowRunLookupSchema>;
+export type GitHubWorkflowRunCancellation = z.input<
+  typeof workflowRunCancellationSchema
+>;
+export type GitHubWorkflowRun = {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  url: string;
+};
 
 export type GitHubFetch = (
   input: string | URL | Request,
@@ -47,6 +80,11 @@ export type GitHubAppClientOptions = {
 
 export type GitHubWorkflowDispatcher = {
   dispatch(input: GitHubWorkflowDispatch): Promise<void>;
+};
+
+export type GitHubWorkflowController = GitHubWorkflowDispatcher & {
+  findRun(input: GitHubWorkflowRunLookup): Promise<GitHubWorkflowRun | null>;
+  cancelRun(input: GitHubWorkflowRunCancellation): Promise<void>;
 };
 
 export class GitHubRequestError extends Error {
@@ -160,10 +198,83 @@ export async function dispatchGitHubWorkflow(
   if (!response.ok) throw failGitHubRequest(response, 'workflow dispatch');
 }
 
+function workflowRunTitle(executionId: string): string {
+  return `DeepAuto execution ${executionId}`;
+}
+
+export async function findGitHubWorkflowRun(
+  accessToken: string,
+  lookup: GitHubWorkflowRunLookup,
+  options: Omit<GitHubAppClientOptions, 'now'> = {},
+): Promise<GitHubWorkflowRun | null> {
+  const parsedToken = z.string().trim().min(1).parse(accessToken);
+  const parsedLookup = workflowRunLookupSchema.parse(lookup);
+  const request = options.fetch ?? fetch;
+  const search = new URLSearchParams({
+    event: 'workflow_dispatch',
+    per_page: '100',
+  });
+  const response = await request(
+    `${apiUrl(options)}/repos/${parsedLookup.repository}/actions/workflows/${encodeURIComponent(parsedLookup.workflow)}/runs?${search}`,
+    {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${parsedToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+  if (!response.ok) throw failGitHubRequest(response, 'workflow run lookup');
+
+  const workflowRun = workflowRunsResponseSchema
+    .parse(await response.json())
+    .workflow_runs.find(
+      (run) => run.display_title === workflowRunTitle(parsedLookup.executionId),
+    );
+  if (!workflowRun) return null;
+
+  return {
+    id: workflowRun.id,
+    status: workflowRun.status,
+    conclusion: workflowRun.conclusion,
+    url: workflowRun.html_url,
+  };
+}
+
+export async function cancelGitHubWorkflowRun(
+  accessToken: string,
+  cancellation: GitHubWorkflowRunCancellation,
+  options: Omit<GitHubAppClientOptions, 'now'> = {},
+): Promise<void> {
+  const parsedToken = z.string().trim().min(1).parse(accessToken);
+  const parsedCancellation = workflowRunCancellationSchema.parse(cancellation);
+  const request = options.fetch ?? fetch;
+  const response = await request(
+    `${apiUrl(options)}/repos/${parsedCancellation.repository}/actions/runs/${parsedCancellation.runId}/cancel`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${parsedToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+  if (!response.ok)
+    throw failGitHubRequest(response, 'workflow run cancellation');
+}
+
 export function createGitHubAppWorkflowDispatcher(
   credentials: GitHubAppCredentials,
   options: GitHubAppClientOptions = {},
-): GitHubWorkflowDispatcher {
+): GitHubWorkflowController {
+  return createGitHubAppWorkflowController(credentials, options);
+}
+
+export function createGitHubAppWorkflowController(
+  credentials: GitHubAppCredentials,
+  options: GitHubAppClientOptions = {},
+): GitHubWorkflowController {
   return {
     async dispatch(input) {
       const accessToken = await createGitHubInstallationAccessToken(
@@ -172,6 +283,22 @@ export function createGitHubAppWorkflowDispatcher(
         options,
       );
       await dispatchGitHubWorkflow(accessToken.token, input, options);
+    },
+    async findRun(input) {
+      const accessToken = await createGitHubInstallationAccessToken(
+        credentials,
+        input.repository,
+        options,
+      );
+      return findGitHubWorkflowRun(accessToken.token, input, options);
+    },
+    async cancelRun(input) {
+      const accessToken = await createGitHubInstallationAccessToken(
+        credentials,
+        input.repository,
+        options,
+      );
+      await cancelGitHubWorkflowRun(accessToken.token, input, options);
     },
   };
 }

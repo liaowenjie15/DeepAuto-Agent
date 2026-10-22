@@ -6,17 +6,24 @@ import {
 import { z } from 'zod';
 
 export {
+  cancelGitHubWorkflowRun,
   createGitHubAppJwt,
+  createGitHubAppWorkflowController,
   createGitHubAppWorkflowDispatcher,
   createGitHubInstallationAccessToken,
   dispatchGitHubWorkflow,
+  findGitHubWorkflowRun,
   type GitHubAppClientOptions,
   type GitHubAppCredentials,
   type GitHubFetch,
   type GitHubInstallationAccessToken,
   GitHubRequestError,
+  type GitHubWorkflowController,
   type GitHubWorkflowDispatch,
   type GitHubWorkflowDispatcher,
+  type GitHubWorkflowRun,
+  type GitHubWorkflowRunCancellation,
+  type GitHubWorkflowRunLookup,
   isRetryableGitHubRequestError,
 } from './actions';
 export {

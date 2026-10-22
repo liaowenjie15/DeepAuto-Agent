@@ -47,6 +47,19 @@ it('requires an execution-bound dispatch input', () => {
   );
 });
 
+it('requires an execution-bound workflow run name', () => {
+  const workflow = readFileSync(executionWorkflowPath, 'utf8');
+  const executionRunName =
+    'run-name: DeepAuto execution $' + '{{ inputs.execution_id }}';
+  const root = fixture(
+    workflow.replace(executionRunName, 'run-name: DeepAuto execution'),
+  );
+
+  expect(inspectWorkflowBoundary(root)).toContain(
+    '.github/workflows/deepauto-execute.yml: must name runs from the workflow_dispatch execution_id input',
+  );
+});
+
 it('rejects direct credentials and datastore access', () => {
   const workflow = readFileSync(executionWorkflowPath, 'utf8');
   const root = fixture(

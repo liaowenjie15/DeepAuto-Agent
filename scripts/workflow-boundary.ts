@@ -36,6 +36,12 @@ function hasRequiredExecutionInput(workflow: string): boolean {
   );
 }
 
+function hasExecutionBoundRunName(workflow: string): boolean {
+  return /^run-name: DeepAuto execution \$\{\{\s*inputs\.execution_id\s*}}$/m.test(
+    workflow,
+  );
+}
+
 export function inspectWorkflowBoundary(root: string): string[] {
   const workflowPath = join(root, EXECUTION_WORKFLOW_PATH);
   if (!existsSync(workflowPath)) {
@@ -48,6 +54,11 @@ export function inspectWorkflowBoundary(root: string): string[] {
   if (!hasRequiredExecutionInput(workflow)) {
     errors.push(
       `${EXECUTION_WORKFLOW_PATH}: requires a workflow_dispatch execution_id input`,
+    );
+  }
+  if (!hasExecutionBoundRunName(workflow)) {
+    errors.push(
+      `${EXECUTION_WORKFLOW_PATH}: must name runs from the workflow_dispatch execution_id input`,
     );
   }
   if (!/EXECUTION_ID:\s*\$\{\{\s*inputs\.execution_id\s*}}/.test(workflow)) {
