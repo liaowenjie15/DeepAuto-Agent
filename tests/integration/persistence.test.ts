@@ -893,7 +893,11 @@ describe('persistence and queue integration', () => {
     const unavailableQueue: JobEnqueuer = {
       add: () => Promise.reject(new Error('control events must not use execute')),
     };
-    expect(await publishPendingOutboxEvents(prisma, unavailableQueue)).toBe(0);
+    expect(
+      await publishPendingOutboxEvents(prisma, unavailableQueue, 100, [
+        created.job.id,
+      ]),
+    ).toBe(0);
     expect(
       await acceptExecutionCallback(prisma, {
         attemptId: attempt?.id ?? '',
