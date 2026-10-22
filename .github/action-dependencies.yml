@@ -23,6 +23,8 @@ actions:
         purpose: Checks out the execution sandbox without persisting GitHub credentials.
       - workflow: .github/workflows/validate.yml
         purpose: Checks out the repository for actionlint and application validation.
+      - workflow: .github/workflows/validate.yml
+        purpose: Checks out the repository for execution-boundary validation.
 
   - source: actions/setup-node
     maintainer: GitHub
@@ -49,3 +51,5 @@ actions:
     usages:
       - workflow: .github/workflows/validate.yml
         purpose: Installs the Bun version declared by `package.json`.
+      - workflow: .github/workflows/validate.yml
+        purpose: Installs Bun for execution-boundary validation.
