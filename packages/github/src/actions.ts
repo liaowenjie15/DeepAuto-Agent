@@ -37,16 +37,16 @@ const workflowRunCancellationSchema = z.object({
   runId: z.number().int().positive(),
 });
 
+const workflowRunSchema = z.object({
+  id: z.number().int().positive(),
+  status: z.string().trim().min(1),
+  conclusion: z.string().trim().min(1).nullable(),
+  display_title: z.string().trim().min(1),
+  html_url: z.url(),
+});
+
 const workflowRunsResponseSchema = z.object({
-  workflow_runs: z.array(
-    z.object({
-      id: z.number().int().positive(),
-      status: z.string().trim().min(1),
-      conclusion: z.string().trim().min(1).nullable(),
-      display_title: z.string().trim().min(1),
-      html_url: z.url(),
-    }),
-  ),
+  workflow_runs: z.array(workflowRunSchema),
 });
 
 export type GitHubAppCredentials = z.infer<typeof appCredentialsSchema>;
@@ -84,6 +84,7 @@ export type GitHubWorkflowDispatcher = {
 
 export type GitHubWorkflowController = GitHubWorkflowDispatcher & {
   findRun(input: GitHubWorkflowRunLookup): Promise<GitHubWorkflowRun | null>;
+  getRun(input: GitHubWorkflowRunCancellation): Promise<GitHubWorkflowRun>;
   cancelRun(input: GitHubWorkflowRunCancellation): Promise<void>;
 };
 
@@ -241,6 +242,35 @@ export async function findGitHubWorkflowRun(
   };
 }
 
+export async function getGitHubWorkflowRun(
+  accessToken: string,
+  lookup: GitHubWorkflowRunCancellation,
+  options: Omit<GitHubAppClientOptions, 'now'> = {},
+): Promise<GitHubWorkflowRun> {
+  const parsedToken = z.string().trim().min(1).parse(accessToken);
+  const parsedLookup = workflowRunCancellationSchema.parse(lookup);
+  const request = options.fetch ?? fetch;
+  const response = await request(
+    `${apiUrl(options)}/repos/${parsedLookup.repository}/actions/runs/${parsedLookup.runId}`,
+    {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${parsedToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+  if (!response.ok) throw failGitHubRequest(response, 'workflow run lookup');
+
+  const workflowRun = workflowRunSchema.parse(await response.json());
+  return {
+    id: workflowRun.id,
+    status: workflowRun.status,
+    conclusion: workflowRun.conclusion,
+    url: workflowRun.html_url,
+  };
+}
+
 export async function cancelGitHubWorkflowRun(
   accessToken: string,
   cancellation: GitHubWorkflowRunCancellation,
@@ -291,6 +321,14 @@ export function createGitHubAppWorkflowController(
         options,
       );
       return findGitHubWorkflowRun(accessToken.token, input, options);
+    },
+    async getRun(input) {
+      const accessToken = await createGitHubInstallationAccessToken(
+        credentials,
+        input.repository,
+        options,
+      );
+      return getGitHubWorkflowRun(accessToken.token, input, options);
     },
     async cancelRun(input) {
       const accessToken = await createGitHubInstallationAccessToken(

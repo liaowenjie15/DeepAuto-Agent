@@ -3,11 +3,24 @@ import IORedis from 'ioredis';
 import type { PrismaClient } from './generated/prisma/client';
 
 export type JobQueue = Queue<{ jobId: string }>;
+export type ExecutionControlQueue = Queue<ExecutionControlQueueData>;
 
 export type JobEnqueuer = {
   add(
     name: string,
     data: { jobId: string },
+    options: { jobId: string },
+  ): Promise<unknown>;
+};
+
+export type ExecutionControlQueueData = {
+  outboxEventId: string;
+};
+
+export type ExecutionControlEnqueuer = {
+  add(
+    name: string,
+    data: ExecutionControlQueueData,
     options: { jobId: string },
   ): Promise<unknown>;
 };
@@ -18,6 +31,13 @@ export function createRedisConnection(redisUrl: string): IORedis {
 
 export function createJobQueue(name: string, connection: IORedis): JobQueue {
   return new Queue<{ jobId: string }>(name, { connection });
+}
+
+export function createExecutionControlQueue(
+  name: string,
+  connection: IORedis,
+): ExecutionControlQueue {
+  return new Queue<ExecutionControlQueueData>(name, { connection });
 }
 
 export async function enqueueJob(
@@ -46,6 +66,32 @@ export async function publishPendingOutboxEvents(
 
   for (const event of events) {
     await enqueueJob(queue, event.jobId, event.queueSequence);
+    await prisma.outboxEvent.updateMany({
+      where: { id: event.id, publishedAt: null },
+      data: { publishedAt: new Date() },
+    });
+  }
+
+  return events.length;
+}
+
+export async function publishPendingExecutionControlEvents(
+  prisma: PrismaClient,
+  queue: ExecutionControlEnqueuer,
+  limit = 100,
+): Promise<number> {
+  const events = await prisma.outboxEvent.findMany({
+    where: { publishedAt: null, kind: 'EXECUTION_CANCEL' },
+    orderBy: { createdAt: 'asc' },
+    take: limit,
+  });
+
+  for (const event of events) {
+    await queue.add(
+      'execution-cancel',
+      { outboxEventId: event.id },
+      { jobId: `execution-control:${event.id}` },
+    );
     await prisma.outboxEvent.updateMany({
       where: { id: event.id, publishedAt: null },
       data: { publishedAt: new Date() },

@@ -3,6 +3,7 @@ import { PrismaClient } from './generated/prisma/client';
 
 export * from './authorization';
 export * from './credential-claim';
+export * from './execution-control';
 export * from './execution-service';
 export * from './execution-service';
 export * from './generated/prisma/client';

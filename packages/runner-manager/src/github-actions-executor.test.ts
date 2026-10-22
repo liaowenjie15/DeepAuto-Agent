@@ -20,6 +20,7 @@ function controller(
   overrides: {
     dispatch?: (input: GitHubWorkflowDispatch) => Promise<void>;
     findRun?: () => Promise<typeof workflowRun | null>;
+    getRun?: (runId: number) => Promise<typeof workflowRun>;
     cancelRun?: (runId: number) => Promise<void>;
   } = {},
 ) {
@@ -29,6 +30,9 @@ function controller(
     },
     async findRun() {
       return (await overrides.findRun?.()) ?? null;
+    },
+    async getRun(input: { runId: number }) {
+      return (await overrides.getRun?.(input.runId)) ?? workflowRun;
     },
     async cancelRun(input: { runId: number }) {
       await overrides.cancelRun?.(input.runId);
@@ -139,6 +143,7 @@ test('maps a matched GitHub Actions run to executor status', async () => {
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
     state: 'running',
+    externalRunId: 41n,
     externalUrl: 'https://github.com/example/repository/actions/runs/41',
   });
 });
@@ -167,6 +172,7 @@ test('cancels only the run resolved for an active execution', async () => {
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
     state: 'cancelling',
+    externalRunId: 41n,
     externalUrl: 'https://github.com/example/repository/actions/runs/41',
   });
   expect(cancelledRunIds).toEqual([41]);
@@ -200,7 +206,36 @@ test('does not cancel a completed GitHub Actions run', async () => {
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
     state: 'completed',
+    externalRunId: 41n,
     externalUrl: 'https://github.com/example/repository/actions/runs/41',
   });
   expect(cancelledRunIds).toEqual([]);
+});
+
+test('uses a persisted Run ID without scanning workflow runs again', async () => {
+  let findRunCalls = 0;
+  const runIds: number[] = [];
+  const executor = new GitHubActionsExecutor(
+    {
+      repository: 'liaowenjie15/deepauto-harness-sandbox',
+      workflow: 'deepauto-execute.yml',
+      workflowRef: 'main',
+    },
+    controller({
+      async findRun() {
+        findRunCalls += 1;
+        return null;
+      },
+      async getRun(runId) {
+        runIds.push(runId);
+        return { ...workflowRun, status: 'completed', conclusion: 'success' };
+      },
+    }),
+  );
+
+  await expect(
+    executor.getStatus({ executionId: 'execution-1', externalRunId: 41n }),
+  ).resolves.toMatchObject({ state: 'completed', externalRunId: 41n });
+  expect(findRunCalls).toBe(0);
+  expect(runIds).toEqual([41]);
 });
