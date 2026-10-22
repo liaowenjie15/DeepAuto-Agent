@@ -10,6 +10,9 @@ import {
 import { z } from 'zod';
 
 export {
+  type ExecutorAdapter,
+  type ExecutorExecutionState,
+  type ExecutorExecutionStatus,
   ExecutorStartError,
   type GitHubActionsExecutionRequest,
   type GitHubActionsExecutionResult,

@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import {
+  cancelGitHubWorkflowRun,
   createGitHubInstallationAccessToken,
   dispatchGitHubWorkflow,
+  findGitHubWorkflowRun,
   type GitHubFetch,
   isRetryableGitHubRequestError,
 } from './actions';
@@ -86,6 +88,85 @@ test('dispatches an explicit workflow ref and only declared inputs', async () =>
   expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
     ref: 'main',
     inputs: { execution_id: 'execution-1' },
+  });
+});
+
+test('finds only the workflow run named for an execution', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const request: GitHubFetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return Response.json({
+      workflow_runs: [
+        {
+          id: 42,
+          status: 'in_progress',
+          conclusion: null,
+          display_title: 'Manual execution',
+          html_url: 'https://github.com/example/repository/actions/runs/42',
+        },
+        {
+          id: 43,
+          status: 'queued',
+          conclusion: null,
+          display_title: 'DeepAuto execution execution-1',
+          html_url: 'https://github.com/example/repository/actions/runs/43',
+        },
+      ],
+    });
+  };
+
+  await expect(
+    findGitHubWorkflowRun(
+      'installation-token',
+      {
+        repository: 'liaowenjie15/deepauto-harness-sandbox',
+        workflow: 'deepauto-execute.yml',
+        executionId: 'execution-1',
+      },
+      { fetch: request },
+    ),
+  ).resolves.toEqual({
+    id: 43,
+    status: 'queued',
+    conclusion: null,
+    url: 'https://github.com/example/repository/actions/runs/43',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    url: 'https://api.github.com/repos/liaowenjie15/deepauto-harness-sandbox/actions/workflows/deepauto-execute.yml/runs?event=workflow_dispatch&per_page=100',
+    init: {
+      headers: expect.objectContaining({
+        Authorization: 'Bearer installation-token',
+      }),
+    },
+  });
+});
+
+test('cancels a supplied workflow run ID', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const request: GitHubFetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return new Response(null, { status: 202 });
+  };
+
+  await cancelGitHubWorkflowRun(
+    'installation-token',
+    {
+      repository: 'liaowenjie15/deepauto-harness-sandbox',
+      runId: 43,
+    },
+    { fetch: request },
+  );
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    url: 'https://api.github.com/repos/liaowenjie15/deepauto-harness-sandbox/actions/runs/43/cancel',
+    init: {
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer installation-token',
+      }),
+    },
   });
 });
 

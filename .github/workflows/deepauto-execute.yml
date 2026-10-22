@@ -1,5 +1,7 @@
 name: DeepAuto Execute
 
+run-name: DeepAuto execution ${{ inputs.execution_id }}
+
 on:
   workflow_dispatch:
     inputs:
