@@ -1,0 +1,51 @@
+version: 1
+
+policy:
+  scope: Third-party actions referenced by `uses:` in `.github/**`.
+  pinning: Use a full 40-character Git commit SHA and retain the reviewed release tag as a comment.
+  upgrades: >-
+    Upgrade one upstream action release per pull request. The pull request must record the upstream
+    changelog, any permission changes, and the previous SHA used for rollback.
+  local_actions: Local actions are reviewed as repository code and are not SHA-pinned.
+
+actions:
+  - source: actions/checkout
+    maintainer: GitHub
+    license: MIT
+    release: v4.4.0
+    sha: 11d5960a326750d5838078e36cf38b85af677262
+    required_permissions: "contents: read"
+    upgrade_channel: https://github.com/actions/checkout/releases
+    rollback_sha: 11d5960a326750d5838078e36cf38b85af677262
+    reviewer: liaowenjie15
+    usages:
+      - workflow: .github/workflows/deepauto-execute.yml
+        purpose: Checks out the execution sandbox without persisting GitHub credentials.
+      - workflow: .github/workflows/validate.yml
+        purpose: Checks out the repository for actionlint and application validation.
+
+  - source: actions/setup-node
+    maintainer: GitHub
+    license: MIT
+    release: v4.4.0
+    sha: 49933ea5288caeca8642d1e84afbd3f7d6820020
+    required_permissions: none
+    upgrade_channel: https://github.com/actions/setup-node/releases
+    rollback_sha: 49933ea5288caeca8642d1e84afbd3f7d6820020
+    reviewer: liaowenjie15
+    usages:
+      - workflow: .github/workflows/validate.yml
+        purpose: Installs the Node.js version declared by `.node-version`.
+
+  - source: oven-sh/setup-bun
+    maintainer: Oven
+    license: MIT
+    release: v2.2.0
+    sha: 0c5077e51419868618aeaa5fe8019c62421857d6
+    required_permissions: none
+    upgrade_channel: https://github.com/oven-sh/setup-bun/releases
+    rollback_sha: 0c5077e51419868618aeaa5fe8019c62421857d6
+    reviewer: liaowenjie15
+    usages:
+      - workflow: .github/workflows/validate.yml
+        purpose: Installs the Bun version declared by `package.json`.
