@@ -14,8 +14,10 @@ export {
   type GitHubAppCredentials,
   type GitHubFetch,
   type GitHubInstallationAccessToken,
+  GitHubRequestError,
   type GitHubWorkflowDispatch,
   type GitHubWorkflowDispatcher,
+  isRetryableGitHubRequestError,
 } from './actions';
 export {
   assertGitHubActionsOidcClaims,

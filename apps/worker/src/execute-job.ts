@@ -5,6 +5,7 @@ import {
   isJobAtConversationHead,
   type PrismaClient,
   releaseConversationClaim,
+  requeueFailedJob,
   startExecution,
   transferConversationClaim,
   tryClaimConversation,
@@ -13,12 +14,14 @@ import {
   type CliHarnessRequest,
   type CliHarnessResult,
   type GitHubActionsExecutor,
+  isRetryableExecutorStartError,
   runCliHarness,
 } from '@deepauto/runner-manager';
 import type IORedis from 'ioredis';
 
 const defaultCallbackTtlMilliseconds = 15 * 60 * 1000;
 const maximumCallbackTtlMilliseconds = 60 * 60 * 1000;
+const defaultMaximumInfrastructureAttempts = 1;
 
 const executionStatusByHarnessStatus = {
   completed: 'COMPLETED',
@@ -52,6 +55,7 @@ export type QueuedJobExecutionResult = {
     | CliHarnessResult['status']
     | 'dispatched'
     | 'deferred'
+    | 'retrying'
     | 'skipped'
     | 'rejected';
   attemptId?: string;
@@ -62,7 +66,9 @@ export type QueuedJobExecutionResult = {
 export type ExecuteQueuedGitHubActionsJobInput = Pick<
   ExecuteQueuedJobInput,
   'jobId' | 'workerId' | 'callbackTtlMilliseconds'
->;
+> & {
+  maximumInfrastructureAttempts?: number;
+};
 
 export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
   ExecuteQueuedJobDependencies,
@@ -84,6 +90,14 @@ function assertCallbackTtl(value: number): void {
     value > maximumCallbackTtlMilliseconds
   ) {
     throw new Error('Worker callback TTL must be between 1ms and one hour');
+  }
+}
+
+function assertMaximumInfrastructureAttempts(value: number): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      'Maximum infrastructure attempts must be a positive integer',
+    );
   }
 }
 
@@ -210,6 +224,9 @@ export async function executeQueuedGitHubActionsJob(
   const callbackTtlMilliseconds =
     input.callbackTtlMilliseconds ?? defaultCallbackTtlMilliseconds;
   assertCallbackTtl(callbackTtlMilliseconds);
+  const maximumInfrastructureAttempts =
+    input.maximumInfrastructureAttempts ?? defaultMaximumInfrastructureAttempts;
+  assertMaximumInfrastructureAttempts(maximumInfrastructureAttempts);
 
   const job = await dependencies.prisma.job.findUnique({
     where: { id: input.jobId },
@@ -284,7 +301,7 @@ export async function executeQueuedGitHubActionsJob(
         executionId: execution.id,
         executionRef: started.executionRef,
       };
-    } catch {
+    } catch (error) {
       const accepted = await failExecutionBeforeDispatch(
         dependencies.prisma,
         execution,
@@ -292,8 +309,13 @@ export async function executeQueuedGitHubActionsJob(
         'GitHub Actions dispatch failed before the execution started',
         now(),
       );
+      const retried =
+        accepted &&
+        isRetryableExecutorStartError(error) &&
+        attempt.number < maximumInfrastructureAttempts &&
+        (await requeueFailedJob(dependencies.prisma, input.jobId));
       return {
-        status: accepted ? 'failed' : 'rejected',
+        status: retried ? 'retrying' : accepted ? 'failed' : 'rejected',
         attemptId: attempt.id,
         executionId: execution.id,
       };

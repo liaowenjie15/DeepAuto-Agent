@@ -14,7 +14,10 @@ import {
   releaseConversationClaim,
   tryClaimConversation,
 } from '../../packages/db/src';
-import type { CliHarnessRequest } from '../../packages/runner-manager/src';
+import {
+  type CliHarnessRequest,
+  ExecutorStartError,
+} from '../../packages/runner-manager/src';
 
 const environment = getTestEnvironment();
 const prisma = createPrismaClient(environment.databaseUrl);
@@ -330,6 +333,56 @@ describe('worker execution integration', () => {
         `${testPrefix}-next-worker`,
       ),
     ).toBe(true);
+  });
+
+  test('retries only a bounded retryable GitHub Actions dispatch failure', async () => {
+    const created = await createOrGetInvocationJob(prisma, input());
+    const retryableExecutor = {
+      start: async () => {
+        throw new ExecutorStartError(true, new Error('GitHub unavailable'));
+      },
+    };
+
+    const first = await executeQueuedGitHubActionsJob(
+      {
+        jobId: created.job.id,
+        workerId: `${testPrefix}-worker`,
+        maximumInfrastructureAttempts: 2,
+      },
+      { prisma, redis, githubActionsExecutor: retryableExecutor },
+    );
+    expect(first.status).toBe('retrying');
+    expect(
+      await prisma.job.findUniqueOrThrow({
+        where: { id: created.job.id },
+        select: { status: true, attempts: { select: { status: true } } },
+      }),
+    ).toEqual({
+      status: JobStatus.QUEUED,
+      attempts: [{ status: AttemptStatus.FAILED }],
+    });
+
+    const second = await executeQueuedGitHubActionsJob(
+      {
+        jobId: created.job.id,
+        workerId: `${testPrefix}-worker`,
+        maximumInfrastructureAttempts: 2,
+      },
+      { prisma, redis, githubActionsExecutor: retryableExecutor },
+    );
+    expect(second.status).toBe('failed');
+    expect(
+      await prisma.job.findUniqueOrThrow({
+        where: { id: created.job.id },
+        select: { status: true, attempts: { select: { status: true } } },
+      }),
+    ).toEqual({
+      status: JobStatus.FAILED,
+      attempts: [
+        { status: AttemptStatus.FAILED },
+        { status: AttemptStatus.FAILED },
+      ],
+    });
   });
 
   test('records a failed execution when the Harness throws before emitting a result', async () => {

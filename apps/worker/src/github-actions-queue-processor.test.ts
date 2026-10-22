@@ -52,3 +52,27 @@ test('completes terminal execution results without delaying the Job', async () =
   await expect(processor(job as never)).resolves.toEqual(result);
   expect(moved).toBe(false);
 });
+
+test('delays a retryable infrastructure failure with its own backoff', async () => {
+  const movedTo: Array<{ timestamp: number; token: string | undefined }> = [];
+  const processor = createGitHubActionsQueueProcessor(
+    {
+      workerId: 'worker-1',
+      infrastructureRetryMilliseconds: 5_000,
+      now: () => 1_000,
+    },
+    {} as never,
+    async () => ({ status: 'retrying' }),
+  );
+  const job = {
+    data: { jobId: 'job-1' } satisfies GitHubActionsQueueData,
+    moveToDelayed: async (timestamp: number, token?: string) => {
+      movedTo.push({ timestamp, token });
+    },
+  };
+
+  await expect(processor(job as never, 'worker-token')).rejects.toBeInstanceOf(
+    DelayedError,
+  );
+  expect(movedTo).toEqual([{ timestamp: 6_000, token: 'worker-token' }]);
+});

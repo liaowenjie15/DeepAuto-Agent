@@ -4,6 +4,7 @@ import {
   createGitHubInstallationAccessToken,
   dispatchGitHubWorkflow,
   type GitHubFetch,
+  isRetryableGitHubRequestError,
 } from './actions';
 
 test('limits an installation token request to the sandbox repository', async () => {
@@ -104,4 +105,29 @@ test('rejects malformed repository names before an API request', async () => {
       { fetch: request },
     ),
   ).rejects.toThrow('Repository must be owner/repository');
+});
+
+test('classifies only transient GitHub API failures as retryable', async () => {
+  const failure = async (status: number) => {
+    try {
+      await dispatchGitHubWorkflow(
+        'installation-token',
+        {
+          repository: 'liaowenjie15/deepauto-harness-sandbox',
+          workflow: 'deepauto-execute.yml',
+          ref: 'main',
+        },
+        {
+          fetch: async () => new Response(null, { status }),
+        },
+      );
+    } catch (error) {
+      return error;
+    }
+    throw new Error('Expected workflow dispatch to fail');
+  };
+
+  expect(isRetryableGitHubRequestError(await failure(503))).toBe(true);
+  expect(isRetryableGitHubRequestError(await failure(429))).toBe(true);
+  expect(isRetryableGitHubRequestError(await failure(403))).toBe(false);
 });
