@@ -2,6 +2,7 @@ import type {
   GitHubWorkflowDispatch,
   GitHubWorkflowDispatcher,
 } from '@deepauto/github';
+import { isRetryableGitHubRequestError } from '@deepauto/github';
 import { z } from 'zod';
 
 const githubActionsExecutorConfigSchema = z.object({
@@ -29,6 +30,33 @@ export type GitHubActionsExecutionResult = {
   executionRef: string;
 };
 
+export class ExecutorStartError extends Error {
+  override readonly name = 'ExecutorStartError';
+
+  constructor(
+    readonly retryable: boolean,
+    cause: unknown,
+  ) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : 'Executor failed before starting the execution',
+      { cause },
+    );
+  }
+}
+
+export function isRetryableExecutorStartError(
+  error: unknown,
+): error is ExecutorStartError {
+  return (
+    error instanceof Error &&
+    error.name === 'ExecutorStartError' &&
+    'retryable' in error &&
+    error.retryable === true
+  );
+}
+
 export class GitHubActionsExecutor {
   readonly #configuration: z.infer<typeof githubActionsExecutorConfigSchema>;
 
@@ -51,7 +79,11 @@ export class GitHubActionsExecutor {
       inputs: { execution_id: parsedRequest.executionId },
     };
 
-    await this.dispatcher.dispatch(dispatch);
+    try {
+      await this.dispatcher.dispatch(dispatch);
+    } catch (error) {
+      throw new ExecutorStartError(isRetryableGitHubRequestError(error), error);
+    }
     return {
       executionRef: `github-actions:${this.#configuration.repository}:${parsedRequest.executionId}`,
     };

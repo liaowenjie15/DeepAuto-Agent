@@ -49,13 +49,34 @@ export type GitHubWorkflowDispatcher = {
   dispatch(input: GitHubWorkflowDispatch): Promise<void>;
 };
 
+export class GitHubRequestError extends Error {
+  override readonly name = 'GitHubRequestError';
+
+  constructor(
+    readonly operation: string,
+    readonly status: number,
+    statusText: string,
+  ) {
+    super(`GitHub ${operation} failed with HTTP ${status} ${statusText}`);
+  }
+}
+
+export function isRetryableGitHubRequestError(error: unknown): boolean {
+  return (
+    error instanceof GitHubRequestError &&
+    (error.status === 408 || error.status === 429 || error.status >= 500)
+  );
+}
+
 function apiUrl(options: GitHubAppClientOptions): string {
   return (options.apiUrl ?? githubApiUrl).replace(/\/$/, '');
 }
 
 function failGitHubRequest(response: Response, operation: string): Error {
-  return new Error(
-    `GitHub ${operation} failed with HTTP ${response.status} ${response.statusText}`,
+  return new GitHubRequestError(
+    operation,
+    response.status,
+    response.statusText,
   );
 }
 

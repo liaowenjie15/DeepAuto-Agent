@@ -10,10 +10,12 @@ import {
 import { z } from 'zod';
 
 export {
+  ExecutorStartError,
   type GitHubActionsExecutionRequest,
   type GitHubActionsExecutionResult,
   GitHubActionsExecutor,
   type GitHubActionsExecutorConfig,
+  isRetryableExecutorStartError,
 } from './github-actions-executor';
 
 const harnessRequestSchema = z.object({
