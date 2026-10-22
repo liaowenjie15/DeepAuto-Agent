@@ -161,6 +161,80 @@ describe('worker execution integration', () => {
     ).toBe(true);
   });
 
+  test('processes three Jobs in conversation order after the first Job fails', async () => {
+    const first = await createOrGetInvocationJob(prisma, input());
+    const second = await createOrGetInvocationJob(
+      prisma,
+      input({
+        sourceEventId: `${testPrefix}-event-2`,
+        idempotencyKey: `${testPrefix}-job-2`,
+      }),
+    );
+    const third = await createOrGetInvocationJob(
+      prisma,
+      input({
+        sourceEventId: `${testPrefix}-event-3`,
+        idempotencyKey: `${testPrefix}-job-3`,
+      }),
+    );
+
+    await expect(
+      executeQueuedJob(workerInput(third.job.id), { prisma, redis }),
+    ).resolves.toEqual({ status: 'deferred' });
+
+    await expect(
+      executeQueuedJob(workerInput(first.job.id), {
+        prisma,
+        redis,
+        runHarness: async (request) => ({
+          status: 'failed',
+          reason: 'controlled first Job failure',
+          events: [
+            { type: 'started', attemptId: request.attemptId },
+            {
+              type: 'failed',
+              attemptId: request.attemptId,
+              reason: 'controlled first Job failure',
+            },
+          ],
+          artifacts: {},
+        }),
+      }),
+    ).resolves.toMatchObject({ status: 'failed' });
+
+    await expect(
+      executeQueuedJob(workerInput(third.job.id), { prisma, redis }),
+    ).resolves.toEqual({ status: 'deferred' });
+
+    await expect(
+      executeQueuedJob(workerInput(second.job.id), {
+        prisma,
+        redis,
+        runHarness: completedHarnessResult,
+      }),
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    await expect(
+      executeQueuedJob(workerInput(third.job.id), {
+        prisma,
+        redis,
+        runHarness: completedHarnessResult,
+      }),
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(
+      await prisma.job.findMany({
+        where: { id: { in: [first.job.id, second.job.id, third.job.id] } },
+        orderBy: { createdAt: 'asc' },
+        select: { status: true },
+      }),
+    ).toEqual([
+      { status: JobStatus.FAILED },
+      { status: JobStatus.COMPLETED },
+      { status: JobStatus.COMPLETED },
+    ]);
+  });
+
   test('dispatches GitHub Actions asynchronously and holds the conversation until callback release', async () => {
     const created = await createOrGetInvocationJob(prisma, input());
     let dispatchedExecutionId: string | undefined;

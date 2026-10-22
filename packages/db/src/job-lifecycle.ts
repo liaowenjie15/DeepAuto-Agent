@@ -21,6 +21,22 @@ const jobStatusForAttemptStatus = {
   [AttemptStatus.CANCELLED]: JobStatus.CANCELLED,
 } as const;
 
+export async function isJobAtConversationHead(
+  prisma: PrismaClient,
+  jobId: string,
+  conversationKey: string,
+): Promise<boolean> {
+  const head = await prisma.job.findFirst({
+    where: {
+      conversationKey,
+      status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] },
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true },
+  });
+  return head?.id === jobId;
+}
+
 export async function beginJobAttempt(
   prisma: PrismaClient,
   jobId: string,
