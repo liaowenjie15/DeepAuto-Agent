@@ -1,10 +1,14 @@
 import type { InboundInvocation, Invocation } from '@deepauto/contracts';
-import type { PrismaClient } from './generated/prisma/client';
+import type { MemberRole, PrismaClient } from './generated/prisma/client';
+
+export type AuthorizedInvocation = Invocation & {
+  memberRole: MemberRole;
+};
 
 export async function authorizeInboundInvocation(
   prisma: PrismaClient,
   invocation: InboundInvocation,
-): Promise<Invocation | null> {
+): Promise<AuthorizedInvocation | null> {
   const member = await prisma.workspaceMember.findFirst({
     where: {
       workspaceId: invocation.workspaceId,
@@ -13,7 +17,7 @@ export async function authorizeInboundInvocation(
         ? { larkOpenId: invocation.providerActorId }
         : { githubUserId: invocation.providerActorId }),
     },
-    select: { id: true },
+    select: { id: true, role: true },
   });
 
   if (!member) return null;
@@ -36,6 +40,7 @@ export async function authorizeInboundInvocation(
     source: invocation.source,
     workspaceId: invocation.workspaceId,
     actorId: member.id,
+    memberRole: member.role,
     conversationKey: invocation.conversationKey,
     anchor: invocation.anchor,
     instruction: invocation.instruction,

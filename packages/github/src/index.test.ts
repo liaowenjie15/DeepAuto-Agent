@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import {
+  getGitHubIssueCommentReceiptTarget,
   normalizeGitHubIssueComment,
   verifyGitHubWebhookSignature,
 } from './index';
@@ -48,4 +49,14 @@ test('normalizes explicit issue or pull-request commands only', () => {
       },
     ),
   ).toBeNull();
+});
+
+test('returns a receipt target only for a signed issue comment repository name', () => {
+  expect(
+    getGitHubIssueCommentReceiptTarget({
+      ...payload,
+      repository: { ...payload.repository, full_name: 'owner/repository' },
+    }),
+  ).toEqual({ repository: 'owner/repository', issueNumber: 7 });
+  expect(getGitHubIssueCommentReceiptTarget(payload)).toBeNull();
 });
