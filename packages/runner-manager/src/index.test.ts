@@ -3,7 +3,12 @@ import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildCliEnvironment, runCliHarness } from './index';
+import {
+  buildCliEnvironment,
+  createLocalSandboxLogReference,
+  normalizeCliHarnessResult,
+  runCliHarness,
+} from './index';
 
 const fixturePath = fileURLToPath(
   new URL('./fake-cli.test-fixture.ts', import.meta.url),
@@ -90,4 +95,30 @@ test('fails a completed CLI that omits required artifacts', async () => {
 
   expect(result.status).toBe('failed');
   expect(result.reason).toContain('commit_sha');
+});
+
+test('normalizes harness results without exposing CLI output', () => {
+  const normalized = normalizeCliHarnessResult(
+    {
+      status: 'timed_out',
+      events: [],
+      artifacts: { test_result: 'artifact://tests-1' },
+    },
+    {
+      finishedAt: new Date('2026-10-25T00:00:00.000Z'),
+      logReference: createLocalSandboxLogReference(
+        'logs/execution-1.log',
+        new Date('2026-10-25T00:00:00.000Z'),
+      ),
+    },
+  );
+
+  expect(normalized).toMatchObject({
+    status: 'TIMED_OUT',
+    failureCategory: 'TIMEOUT',
+    retryable: true,
+    safeSummary: 'Execution exceeded its deadline and will retry.',
+    artifacts: [{ name: 'test_result', reference: 'artifact://tests-1' }],
+  });
+  expect(normalized.logReference?.expiresAt).toBe('2026-11-24T00:00:00.000Z');
 });

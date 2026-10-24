@@ -324,7 +324,7 @@ describe('worker execution integration', () => {
       }),
     ).toEqual({
       status: 'FAILED',
-      reason: 'GitHub Actions dispatch failed before the execution started',
+      reason: 'GitHub Actions rejected the execution dispatch.',
     });
     expect(
       await tryClaimConversation(
@@ -335,7 +335,7 @@ describe('worker execution integration', () => {
     ).toBe(true);
   });
 
-  test('retries only a bounded retryable GitHub Actions dispatch failure', async () => {
+  test('retries a retryable GitHub Actions dispatch failure at most twice', async () => {
     const created = await createOrGetInvocationJob(prisma, input());
     const retryableExecutor = {
       start: async () => {
@@ -347,11 +347,10 @@ describe('worker execution integration', () => {
       {
         jobId: created.job.id,
         workerId: `${testPrefix}-worker`,
-        maximumInfrastructureAttempts: 2,
       },
       { prisma, redis, githubActionsExecutor: retryableExecutor },
     );
-    expect(first.status).toBe('retrying');
+    expect(first.status).toBe('retry_scheduled');
     expect(
       await prisma.job.findUniqueOrThrow({
         where: { id: created.job.id },
@@ -366,11 +365,19 @@ describe('worker execution integration', () => {
       {
         jobId: created.job.id,
         workerId: `${testPrefix}-worker`,
-        maximumInfrastructureAttempts: 2,
       },
       { prisma, redis, githubActionsExecutor: retryableExecutor },
     );
-    expect(second.status).toBe('failed');
+    expect(second.status).toBe('retry_scheduled');
+
+    const third = await executeQueuedGitHubActionsJob(
+      {
+        jobId: created.job.id,
+        workerId: `${testPrefix}-worker`,
+      },
+      { prisma, redis, githubActionsExecutor: retryableExecutor },
+    );
+    expect(third.status).toBe('failed');
     expect(
       await prisma.job.findUniqueOrThrow({
         where: { id: created.job.id },
@@ -379,6 +386,7 @@ describe('worker execution integration', () => {
     ).toEqual({
       status: JobStatus.FAILED,
       attempts: [
+        { status: AttemptStatus.FAILED },
         { status: AttemptStatus.FAILED },
         { status: AttemptStatus.FAILED },
       ],
@@ -396,7 +404,7 @@ describe('worker execution integration', () => {
       },
     });
 
-    expect(result.status).toBe('failed');
+    expect(result.status).toBe('retry_scheduled');
     expect(
       await prisma.execution.findUniqueOrThrow({
         where: { id: result.executionId },
@@ -408,7 +416,7 @@ describe('worker execution integration', () => {
       }),
     ).toEqual({
       status: 'FAILED',
-      reason: 'CLI harness failed before producing an execution result',
+      reason: 'Execution validation failed.',
       events: [],
     });
     expect(
@@ -417,7 +425,7 @@ describe('worker execution integration', () => {
         select: { status: true, attempts: { select: { status: true } } },
       }),
     ).toEqual({
-      status: JobStatus.FAILED,
+      status: JobStatus.QUEUED,
       attempts: [{ status: AttemptStatus.FAILED }],
     });
   });

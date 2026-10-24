@@ -58,6 +58,7 @@ export async function publishPendingOutboxEvents(
     where: {
       publishedAt: null,
       kind: 'JOB_ENQUEUE',
+      availableAt: { lte: new Date() },
       jobId: jobIds ? { in: [...jobIds] } : undefined,
     },
     orderBy: { createdAt: 'asc' },

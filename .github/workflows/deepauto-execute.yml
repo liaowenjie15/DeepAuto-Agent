@@ -245,14 +245,34 @@ jobs:
           # shellcheck disable=SC2016
           callback_body="$(node -e '
             const fs = require("node:fs");
-            const [status, reason, eventsFile] = process.argv.slice(1);
+            const [attemptId, status, reason, eventsFile, serverUrl, repository, runId] = process.argv.slice(1);
             const events = fs.existsSync(eventsFile)
               ? fs.readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
               : [];
-            const body = { status, events };
-            if (reason) body.reason = reason;
+            const artifacts = events
+              .filter((event) => event.type === "artifact")
+              .map((event) => ({ name: event.name, reference: event.value }));
+            const completed = status === "COMPLETED";
+            const timedOut = status === "TIMED_OUT";
+            const result = {
+              status,
+              safeSummary: completed
+                ? "Execution completed successfully."
+                : timedOut
+                  ? "Execution exceeded its deadline and will retry."
+                  : "Execution validation failed.",
+              retryable: timedOut,
+              logReference: {
+                provider: "github_actions",
+                reference: `${serverUrl}/${repository}/actions/runs/${runId}`,
+              },
+              artifacts,
+              finishedAt: new Date().toISOString(),
+            };
+            if (!completed) result.failureCategory = timedOut ? "TIMEOUT" : status === "CANCELLED" ? "CANCELLED" : "VALIDATION_FAILED";
+            const body = { attemptId, result, events };
             process.stdout.write(JSON.stringify(body));
-          ' "$callback_status" "$callback_reason" "$events_file")"
+          ' "$attempt_id" "$callback_status" "$callback_reason" "$events_file" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl --fail --silent --show-error --output /dev/null \
             --header "Authorization: Bearer $oidc_token" \
             --header "Content-Type: application/json" \

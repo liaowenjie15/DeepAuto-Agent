@@ -1,9 +1,15 @@
-import type { ExecutionEvent } from '@deepauto/contracts';
+import {
+  type ExecutionEvent,
+  type ExecutionResult,
+  executionResultSchema,
+} from '@deepauto/contracts';
 import {
   AttemptStatus,
   ExecutionArtifactName,
   ExecutionCancellationRequestStatus,
   ExecutionEventType,
+  ExecutionFailureCategory,
+  ExecutionLogProvider,
   type ExecutionStatus,
   JobStatus,
   type Prisma,
@@ -15,17 +21,21 @@ export type StartExecutionInput = {
   callbackExpiresAt: Date;
 };
 
+type TerminalExecutionStatus = Exclude<ExecutionStatus, 'RUNNING'>;
+
 export type ExecutionCallbackInput = {
   attemptId: string;
   callbackClaimId: string;
-  status: ExecutionStatus;
-  reason?: string;
   events: ExecutionEvent[];
   now?: Date;
-};
+} & (
+  | { result: ExecutionResult; status?: never; reason?: never }
+  | { result?: never; status: TerminalExecutionStatus; reason?: string }
+);
 
 export type ExecutionCallbackResult = {
   accepted: boolean;
+  retryScheduled?: true;
 };
 
 export type ExecutionBootstrap = {
@@ -34,12 +44,19 @@ export type ExecutionBootstrap = {
   instruction: string;
 };
 
-export type ExecutionCallbackByExecutionIdInput = Omit<
-  ExecutionCallbackInput,
-  'attemptId' | 'callbackClaimId'
-> & {
-  executionId: string;
-};
+export type ExecutionCallbackByExecutionIdInput =
+  | (Omit<
+      Extract<ExecutionCallbackInput, { result: ExecutionResult }>,
+      'callbackClaimId'
+    > & {
+      executionId: string;
+    })
+  | (Omit<
+      Extract<ExecutionCallbackInput, { status: TerminalExecutionStatus }>,
+      'attemptId' | 'callbackClaimId'
+    > & {
+      executionId: string;
+    });
 
 const terminalEventTypes = new Set(['completed', 'failed']);
 
@@ -60,15 +77,31 @@ const eventTypes = {
   failed: ExecutionEventType.FAILED,
 } as const;
 
+const failureCategories = {
+  VALIDATION_FAILED: ExecutionFailureCategory.VALIDATION_FAILED,
+  POLICY_REJECTED: ExecutionFailureCategory.POLICY_REJECTED,
+  CANCELLED: ExecutionFailureCategory.CANCELLED,
+  TIMEOUT: ExecutionFailureCategory.TIMEOUT,
+  INFRASTRUCTURE_FAILED: ExecutionFailureCategory.INFRASTRUCTURE_FAILED,
+  CALLBACK_REJECTED: ExecutionFailureCategory.CALLBACK_REJECTED,
+} as const;
+
+const logProviders = {
+  github_actions: ExecutionLogProvider.GITHUB_ACTIONS,
+  local_sandbox: ExecutionLogProvider.LOCAL_SANDBOX,
+} as const;
+
+const maximumAutomaticRetries = 2;
+const initialRetryBackoffMilliseconds = 5_000;
+
 function assertCallbackEvents(
   attemptId: string,
-  status: ExecutionStatus,
-  reason: string | undefined,
+  result: ExecutionResult,
   events: ExecutionEvent[],
 ): void {
   if (events.length === 0) {
-    if (status === 'FAILED' && reason?.trim()) return;
-    throw new Error('Execution callback must begin with a started event');
+    if (result.status !== 'COMPLETED') return;
+    throw new Error('A completed callback must begin with a started event');
   }
   if (events[0]?.type !== 'started') {
     throw new Error('Execution callback must begin with a started event');
@@ -99,14 +132,63 @@ function assertCallbackEvents(
     }
   }
 
-  if (status === 'COMPLETED' && terminalType !== 'completed') {
+  if (result.status === 'COMPLETED' && terminalType !== 'completed') {
     throw new Error('A completed execution requires a completed event');
   }
-  if ((status === 'CANCELLED' || status === 'TIMED_OUT') && terminalSeen) {
+  if (
+    (result.status === 'CANCELLED' || result.status === 'TIMED_OUT') &&
+    terminalSeen
+  ) {
     throw new Error(
       'Cancelled or timed out executions cannot report a terminal CLI event',
     );
   }
+}
+
+function shouldScheduleRetry(result: ExecutionResult, attemptNumber: number) {
+  return result.retryable && attemptNumber <= maximumAutomaticRetries;
+}
+
+function retryAvailableAt(attemptNumber: number, now: Date): Date {
+  return new Date(
+    now.getTime() + initialRetryBackoffMilliseconds * 2 ** (attemptNumber - 1),
+  );
+}
+
+function resultFromLegacyCallback(
+  input: ExecutionCallbackInput,
+): ExecutionResult {
+  if (input.result) return input.result;
+
+  const artifacts = input.events.flatMap((event) =>
+    event.type === 'artifact'
+      ? [{ name: event.name, reference: event.value }]
+      : [],
+  );
+  const status = input.status;
+  const failureCategory =
+    status === 'CANCELLED'
+      ? 'CANCELLED'
+      : status === 'TIMED_OUT'
+        ? 'TIMEOUT'
+        : status === 'FAILED'
+          ? 'VALIDATION_FAILED'
+          : undefined;
+  return {
+    status,
+    failureCategory,
+    safeSummary:
+      status === 'COMPLETED'
+        ? 'Execution completed successfully.'
+        : status === 'CANCELLED'
+          ? 'Execution was cancelled.'
+          : status === 'TIMED_OUT'
+            ? 'Execution exceeded its deadline and will retry.'
+            : 'Execution validation failed.',
+    retryable: status === 'TIMED_OUT',
+    artifacts,
+    finishedAt: (input.now ?? new Date()).toISOString(),
+  };
 }
 
 function attemptStatusForExecution(
@@ -221,7 +303,22 @@ export async function acceptExecutionCallbackByExecutionId(
     },
   });
 
-  if (!execution?.callbackClaim) return { accepted: false };
+  if (
+    !execution?.callbackClaim ||
+    ('attemptId' in input && execution.attemptId !== input.attemptId)
+  ) {
+    return { accepted: false };
+  }
+
+  if ('result' in input && input.result) {
+    return acceptExecutionCallback(prisma, {
+      attemptId: input.attemptId,
+      callbackClaimId: execution.callbackClaim.id,
+      result: input.result,
+      events: input.events,
+      now,
+    });
+  }
 
   return acceptExecutionCallback(prisma, {
     attemptId: execution.attemptId,
@@ -238,12 +335,8 @@ export async function acceptExecutionCallback(
   input: ExecutionCallbackInput,
 ): Promise<ExecutionCallbackResult> {
   const now = input.now ?? new Date();
-  assertCallbackEvents(
-    input.attemptId,
-    input.status,
-    input.reason,
-    input.events,
-  );
+  const result = executionResultSchema.parse(resultFromLegacyCallback(input));
+  assertCallbackEvents(input.attemptId, result, input.events);
 
   return prisma.$transaction(async (transaction) => {
     const execution = await transaction.execution.findFirst({
@@ -265,8 +358,11 @@ export async function acceptExecutionCallback(
       where: { id: execution.attemptId },
       select: { jobId: true, number: true },
     });
-    const jobStatus = jobStatusForExecution(input.status);
-    const attemptStatus = attemptStatusForExecution(input.status);
+    const retryScheduled = shouldScheduleRetry(result, attempt.number);
+    const jobStatus = retryScheduled
+      ? JobStatus.QUEUED
+      : jobStatusForExecution(result.status);
+    const attemptStatus = attemptStatusForExecution(result.status);
     const updatedJob = await transaction.job.updateMany({
       where: {
         id: attempt.jobId,
@@ -275,7 +371,7 @@ export async function acceptExecutionCallback(
       },
       data: {
         status: jobStatus,
-        cancelledAt: input.status === 'CANCELLED' ? now : undefined,
+        cancelledAt: result.status === 'CANCELLED' ? now : undefined,
       },
     });
     if (updatedJob.count !== 1) return { accepted: false };
@@ -303,13 +399,30 @@ export async function acceptExecutionCallback(
 
     await transaction.execution.update({
       where: { id: execution.id },
-      data: { status: input.status, reason: input.reason, finishedAt: now },
+      data: {
+        status: result.status,
+        reason: result.safeSummary,
+        failureCategory: result.failureCategory
+          ? failureCategories[result.failureCategory]
+          : null,
+        retryable: result.retryable,
+        logProvider: result.logReference
+          ? logProviders[result.logReference.provider]
+          : null,
+        logReference: result.logReference?.reference ?? null,
+        logExpiresAt: result.logReference?.expiresAt
+          ? new Date(result.logReference.expiresAt)
+          : null,
+        testSummary: result.testSummary as Prisma.InputJsonValue | undefined,
+        reportedAt: new Date(result.finishedAt),
+        finishedAt: now,
+      },
     });
     await transaction.executionCancellationRequest.updateMany({
       where: { executionId: execution.id },
       data: {
         status:
-          input.status === 'CANCELLED'
+          result.status === 'CANCELLED'
             ? ExecutionCancellationRequestStatus.COMPLETED
             : ExecutionCancellationRequestStatus.SUPERSEDED,
       },
@@ -322,20 +435,30 @@ export async function acceptExecutionCallback(
         payload: event as Prisma.InputJsonValue,
       })),
     });
-    const artifacts = input.events.filter(
-      (event): event is Extract<ExecutionEvent, { type: 'artifact' }> =>
-        event.type === 'artifact',
-    );
-    if (artifacts.length > 0) {
+    if (result.artifacts.length > 0) {
       await transaction.executionArtifact.createMany({
-        data: artifacts.map((artifact) => ({
+        data: result.artifacts.map((artifact) => ({
           executionId: execution.id,
           name: artifactNames[artifact.name],
-          value: artifact.value,
+          value: artifact.reference,
         })),
       });
     }
 
-    return { accepted: true };
+    if (retryScheduled) {
+      await transaction.outboxEvent.create({
+        data: {
+          jobId: attempt.jobId,
+          kind: 'JOB_ENQUEUE',
+          queueSequence: attempt.number + 1,
+          dedupeKey: `job:${attempt.jobId}:retry:${attempt.number + 1}`,
+          availableAt: retryAvailableAt(attempt.number, now),
+        },
+      });
+    }
+
+    return retryScheduled
+      ? { accepted: true, retryScheduled: true }
+      : { accepted: true };
   });
 }

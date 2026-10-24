@@ -1,4 +1,7 @@
-import { executionEventSchema } from '@deepauto/contracts';
+import {
+  executionEventSchema,
+  executionResultSchema,
+} from '@deepauto/contracts';
 import {
   acceptExecutionCallbackByExecutionId,
   type ExecutionBootstrap,
@@ -34,8 +37,8 @@ import {
 } from './execution-control-command';
 
 const executionCallbackSchema = z.object({
-  status: z.enum(['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT']),
-  reason: z.string().trim().min(1).optional(),
+  attemptId: z.string().trim().min(1),
+  result: executionResultSchema,
   events: z.array(executionEventSchema),
 });
 

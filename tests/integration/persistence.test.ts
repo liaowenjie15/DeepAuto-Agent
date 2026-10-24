@@ -664,7 +664,7 @@ describe('persistence and queue integration', () => {
     });
     expect({ status: persisted.status, reason: persisted.reason }).toEqual({
       status: 'COMPLETED',
-      reason: null,
+      reason: 'Execution completed successfully.',
     });
     expect(persisted.events.map((event) => event.type)).toEqual([
       'STARTED',

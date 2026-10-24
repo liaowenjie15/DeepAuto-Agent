@@ -66,6 +66,20 @@ enum ExecutionStatus {
   TIMED_OUT
 }
 
+enum ExecutionFailureCategory {
+  VALIDATION_FAILED
+  POLICY_REJECTED
+  CANCELLED
+  TIMEOUT
+  INFRASTRUCTURE_FAILED
+  CALLBACK_REJECTED
+}
+
+enum ExecutionLogProvider {
+  GITHUB_ACTIONS
+  LOCAL_SANDBOX
+}
+
 enum ExecutionEventType {
   STARTED
   PROGRESS
@@ -165,20 +179,27 @@ model JobAttempt {
 }
 
 model Execution {
-  id            String          @id @default(cuid())
-  attemptId     String          @unique
-  status        ExecutionStatus @default(RUNNING)
-  externalRunId BigInt?         @unique
-  externalUrl   String?
-  reason        String?
-  startedAt     DateTime        @default(now())
-  finishedAt    DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  attempt       JobAttempt      @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  events        ExecutionEvent[]
-  artifacts     ExecutionArtifact[]
-  callbackClaim ExecutionCallbackClaim?
+  id              String                    @id @default(cuid())
+  attemptId       String                    @unique
+  status          ExecutionStatus           @default(RUNNING)
+  externalRunId   BigInt?                   @unique
+  externalUrl     String?
+  reason          String?
+  failureCategory ExecutionFailureCategory?
+  retryable       Boolean                   @default(false)
+  logProvider     ExecutionLogProvider?
+  logReference    String?
+  logExpiresAt    DateTime?
+  testSummary     Json?
+  reportedAt      DateTime?
+  startedAt       DateTime                  @default(now())
+  finishedAt      DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  attempt         JobAttempt                @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  events          ExecutionEvent[]
+  artifacts       ExecutionArtifact[]
+  callbackClaim   ExecutionCallbackClaim?
   cancellationRequest ExecutionCancellationRequest?
 
   @@index([status, startedAt])
@@ -239,6 +260,7 @@ model OutboxEvent {
   kind          OutboxEventKind
   queueSequence Int            @default(0)
   dedupeKey     String         @unique
+  availableAt   DateTime       @default(now())
   createdAt     DateTime       @default(now())
   publishedAt   DateTime?
   job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
