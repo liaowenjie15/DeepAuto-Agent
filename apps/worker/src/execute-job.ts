@@ -4,6 +4,7 @@ import {
   type ExecutionStatus,
   isJobAtConversationHead,
   type PrismaClient,
+  recordExecutionExternalRun,
   releaseConversationClaim,
   startExecution,
   transferConversationClaim,
@@ -12,6 +13,7 @@ import {
 import {
   type CliHarnessRequest,
   type CliHarnessResult,
+  ExecutorStartError,
   type GitHubActionsExecutor,
   isRetryableExecutorStartError,
   normalizeCliHarnessResult,
@@ -21,6 +23,8 @@ import type IORedis from 'ioredis';
 
 const defaultCallbackTtlMilliseconds = 15 * 60 * 1000;
 const maximumCallbackTtlMilliseconds = 60 * 60 * 1000;
+const runDiscoveryTimeoutMilliseconds = 60_000;
+const runDiscoveryIntervalMilliseconds = 2_000;
 
 const executionStatusByHarnessStatus = {
   completed: 'COMPLETED',
@@ -72,8 +76,23 @@ export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
   ExecuteQueuedJobDependencies,
   'runHarness'
 > & {
-  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start'>;
+  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start' | 'getStatus'>;
 };
+
+async function discoverExecutionRun(
+  executor: Pick<GitHubActionsExecutor, 'getStatus'>,
+  executionId: string,
+): Promise<bigint | undefined> {
+  const deadline = Date.now() + runDiscoveryTimeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const status = await executor.getStatus({ executionId });
+    if (status.externalRunId) return status.externalRunId;
+    await new Promise((resolve) =>
+      setTimeout(resolve, runDiscoveryIntervalMilliseconds),
+    );
+  }
+  return undefined;
+}
 
 export function toExecutionStatus(
   status: CliHarnessResult['status'],
@@ -288,6 +307,23 @@ export async function executeQueuedGitHubActionsJob(
       const started = await dependencies.githubActionsExecutor.start({
         executionId: execution.id,
       });
+      const externalRunId = await discoverExecutionRun(
+        dependencies.githubActionsExecutor,
+        execution.id,
+      );
+      if (
+        !externalRunId ||
+        !(await recordExecutionExternalRun(
+          dependencies.prisma,
+          execution.id,
+          externalRunId,
+        ))
+      ) {
+        throw new ExecutorStartError(
+          true,
+          new Error('GitHub Actions run was not bound to the execution'),
+        );
+      }
       releaseConversation = false;
       return {
         status: 'dispatched',

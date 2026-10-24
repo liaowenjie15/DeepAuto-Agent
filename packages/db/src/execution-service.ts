@@ -44,6 +44,34 @@ export type ExecutionBootstrap = {
   instruction: string;
 };
 
+export async function recordExecutionExternalRun(
+  prisma: PrismaClient,
+  executionId: string,
+  externalRunId: bigint,
+): Promise<boolean> {
+  const bound = await prisma.execution.updateMany({
+    where: {
+      id: executionId,
+      status: 'RUNNING',
+      OR: [{ externalRunId: null }, { externalRunId }],
+    },
+    data: { externalRunId },
+  });
+  return bound.count === 1;
+}
+
+export async function bindExecutionToExternalRun(
+  prisma: PrismaClient,
+  executionId: string,
+  externalRunId: bigint,
+): Promise<boolean> {
+  const execution = await prisma.execution.findFirst({
+    where: { id: executionId, status: 'RUNNING', externalRunId },
+    select: { id: true },
+  });
+  return execution !== null;
+}
+
 export type ExecutionCallbackByExecutionIdInput =
   | (Omit<
       Extract<ExecutionCallbackInput, { result: ExecutionResult }>,
@@ -349,7 +377,11 @@ export async function acceptExecutionCallback(
           expiresAt: { gt: now },
         },
       },
-      select: { id: true, attemptId: true },
+      select: {
+        id: true,
+        attemptId: true,
+        cancellationRequest: { select: { id: true } },
+      },
     });
 
     if (!execution) return { accepted: false };
@@ -358,7 +390,9 @@ export async function acceptExecutionCallback(
       where: { id: execution.attemptId },
       select: { jobId: true, number: true },
     });
-    const retryScheduled = shouldScheduleRetry(result, attempt.number);
+    const retryScheduled =
+      !execution.cancellationRequest &&
+      shouldScheduleRetry(result, attempt.number);
     const jobStatus = retryScheduled
       ? JobStatus.QUEUED
       : jobStatusForExecution(result.status);

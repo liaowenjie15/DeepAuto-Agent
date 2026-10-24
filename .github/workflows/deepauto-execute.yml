@@ -188,8 +188,11 @@ jobs:
             ' "$events_file" "$1" "$2" "${3:-}"
           }
 
-          if [[ -f "$attempt_file" && -f "$DEEPAUTO_STATE_DIR/codex-exit" ]]; then
+          attempt_id=""
+          if [[ -f "$attempt_file" ]]; then
             attempt_id="$(cat "$attempt_file")"
+          fi
+          if [[ -n "$attempt_id" && -f "$DEEPAUTO_STATE_DIR/codex-exit" ]]; then
             codex_exit="$(cat "$DEEPAUTO_STATE_DIR/codex-exit")"
             if [[ -f "$DEEPAUTO_STATE_DIR/prompt-layers.json" ]]; then
               append_event "$attempt_id" artifact "$(printf 'prompt_layers\t%s' "$(cat "$DEEPAUTO_STATE_DIR/prompt-layers.json")")"

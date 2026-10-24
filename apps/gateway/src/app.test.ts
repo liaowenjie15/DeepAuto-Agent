@@ -110,6 +110,7 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
       }),
     },
     executionService: {
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async (_prisma, executionId) => ({
         executionId,
         attemptId: 'attempt-1',
@@ -183,6 +184,7 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
       },
     },
     executionService: {
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async (_prisma, executionId) =>
         executionIsActive
           ? {
@@ -277,6 +279,7 @@ test('accepts a terminal callback without exposing the callback claim', async ()
       releasedExecutionId = executionId;
     },
     executionService: {
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async () => null,
       acceptExecutionCallbackByExecutionId: async (_prisma, input) => {
         callbackInput = input;

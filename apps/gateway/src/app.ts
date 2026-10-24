@@ -4,6 +4,7 @@ import {
 } from '@deepauto/contracts';
 import {
   acceptExecutionCallbackByExecutionId,
+  bindExecutionToExternalRun,
   type ExecutionBootstrap,
   type ExecutionCallbackByExecutionIdInput,
   getActiveExecutionBootstrap,
@@ -11,6 +12,7 @@ import {
 } from '@deepauto/db';
 import {
   deepAutoReceiptMarker,
+  type GitHubActionsOidcClaims,
   type GitHubActionsOidcTokenVerifier,
   type GitHubActionsOidcTrustPolicy,
   type GitHubIssueCommentPublisher,
@@ -80,6 +82,11 @@ export type GitHubActionsGatewayConfiguration = {
 };
 
 export type GatewayExecutionService = {
+  bindExecutionToExternalRun: (
+    prisma: PrismaClient,
+    executionId: string,
+    externalRunId: bigint,
+  ) => Promise<boolean>;
   getActiveExecutionBootstrap: (
     prisma: PrismaClient,
     executionId: string,
@@ -117,19 +124,18 @@ function bearerToken(value: string | undefined): string | null {
 async function verifyActionsRequest(
   authorization: string | undefined,
   configuration: GitHubActionsGatewayConfiguration,
-): Promise<boolean> {
+): Promise<GitHubActionsOidcClaims | null> {
   const token = bearerToken(authorization);
-  if (!token) return false;
+  if (!token) return null;
 
   try {
-    await verifyGitHubActionsOidcToken(
+    return await verifyGitHubActionsOidcToken(
       token,
       configuration.oidcTrustPolicy,
       configuration.verifyOidcToken,
     );
-    return true;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -147,6 +153,7 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
     configuration.executionService ??
     ({
       getActiveExecutionBootstrap,
+      bindExecutionToExternalRun,
       acceptExecutionCallbackByExecutionId,
     } satisfies GatewayExecutionService);
   const codexProxy = configuration.codexProxy
@@ -274,16 +281,24 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
           404,
         );
       }
-      if (
-        !(await verifyActionsRequest(
-          context.req.header('authorization'),
-          configuration.githubActions,
-        ))
-      ) {
+      const claims = await verifyActionsRequest(
+        context.req.header('authorization'),
+        configuration.githubActions,
+      );
+      if (!claims) {
         return context.json(
           { error: 'invalid GitHub Actions OIDC token' },
           401,
         );
+      }
+      if (
+        !(await executionService.bindExecutionToExternalRun(
+          configuration.prisma,
+          context.req.param('executionId'),
+          BigInt(claims.run_id),
+        ))
+      ) {
+        return context.json({ error: 'execution is unavailable' }, 404);
       }
 
       const bootstrap = await executionService.getActiveExecutionBootstrap(
@@ -304,12 +319,11 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
       if (!configuration.githubActions || !codexProxy) {
         return context.json({ error: 'Codex proxy is not configured' }, 404);
       }
-      if (
-        !(await verifyActionsRequest(
-          context.req.header('authorization'),
-          configuration.githubActions,
-        ))
-      ) {
+      const claims = await verifyActionsRequest(
+        context.req.header('authorization'),
+        configuration.githubActions,
+      );
+      if (!claims) {
         return context.json(
           { error: 'invalid GitHub Actions OIDC token' },
           401,
@@ -318,6 +332,14 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
 
       const now = configuration.now?.() ?? new Date();
       const executionId = context.req.param('executionId');
+      if (
+        !(await executionService.bindExecutionToExternalRun(
+          configuration.prisma,
+          executionId,
+          BigInt(claims.run_id),
+        ))
+      )
+        return context.json({ error: 'execution is unavailable' }, 404);
       const bootstrap = await executionService.getActiveExecutionBootstrap(
         configuration.prisma,
         executionId,
@@ -420,17 +442,25 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
           404,
         );
       }
-      if (
-        !(await verifyActionsRequest(
-          context.req.header('authorization'),
-          configuration.githubActions,
-        ))
-      ) {
+      const claims = await verifyActionsRequest(
+        context.req.header('authorization'),
+        configuration.githubActions,
+      );
+      if (!claims) {
         return context.json(
           { error: 'invalid GitHub Actions OIDC token' },
           401,
         );
       }
+
+      if (
+        !(await executionService.bindExecutionToExternalRun(
+          configuration.prisma,
+          context.req.param('executionId'),
+          BigInt(claims.run_id),
+        ))
+      )
+        return context.json({ error: 'execution is unavailable' }, 404);
 
       const body = executionCallbackSchema.safeParse(await context.req.json());
       if (!body.success)

@@ -257,6 +257,11 @@ describe('worker execution integration', () => {
             dispatchedExecutionId = executionId;
             return { executionRef: `github-actions:sandbox:${executionId}` };
           },
+          getStatus: async ({ executionId }) => ({
+            executionRef: `github-actions:sandbox:${executionId}`,
+            state: 'queued',
+            externalRunId: 123n,
+          }),
         },
       },
     );
