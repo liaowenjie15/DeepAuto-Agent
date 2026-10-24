@@ -29,19 +29,6 @@ export {
   isRetryableGitHubRequestError,
 } from './actions';
 export {
-  createGitHubAppIssueCommentPublisher,
-  createGitHubIssueComment,
-  type GitHubIssueComment,
-  type GitHubIssueCommentPublisher,
-} from './comments';
-export {
-  createGitHubAppPullRequestInspector,
-  getGitHubPullRequest,
-  type GitHubPullRequest,
-  type GitHubPullRequestInspector,
-  type GitHubPullRequestLookup,
-} from './pull-requests';
-export {
   assertGitHubActionsOidcClaims,
   type GitHubActionsOidcClaims,
   type GitHubActionsOidcTokenVerifier,
@@ -49,10 +36,23 @@ export {
   verifyGitHubActionsOidcToken,
 } from './actions-oidc';
 export {
+  createGitHubAppIssueCommentPublisher,
+  createGitHubIssueComment,
+  type GitHubIssueComment,
+  type GitHubIssueCommentPublisher,
+} from './comments';
+export {
   type ExecutionProxyTokenClaims,
   issueExecutionProxyToken,
   verifyExecutionProxyToken,
 } from './execution-proxy-token';
+export {
+  createGitHubAppPullRequestInspector,
+  type GitHubPullRequest,
+  type GitHubPullRequestInspector,
+  type GitHubPullRequestLookup,
+  getGitHubPullRequest,
+} from './pull-requests';
 
 const issueCommentSchema = z.object({
   action: z.literal('created'),
