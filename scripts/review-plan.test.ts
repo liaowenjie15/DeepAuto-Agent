@@ -6,9 +6,9 @@ it('requires an execution safety review for registered high-risk paths', () => {
   expect(requiresExecutionSafetyReview('.github/workflows/validate.yml')).toBe(
     true,
   );
-  expect(requiresExecutionSafetyReview('packages/db/src/execution-service.ts')).toBe(
-    true,
-  );
+  expect(
+    requiresExecutionSafetyReview('packages/db/src/execution-service.ts'),
+  ).toBe(true);
 });
 
 it('keeps ordinary documentation changes on the general review path', () => {
