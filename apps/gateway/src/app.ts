@@ -10,6 +10,8 @@ import {
   deepAutoReceiptMarker,
   type GitHubActionsOidcTokenVerifier,
   type GitHubActionsOidcTrustPolicy,
+  type GitHubIssueCommentPublisher,
+  type GitHubPullRequestInspector,
   getGitHubIssueCommentReceiptTarget,
   isGitHubIssueCommentFromActor,
   issueExecutionProxyToken,
@@ -86,13 +88,7 @@ export type GatewayExecutionService = {
   ) => Promise<{ accepted: boolean }>;
 };
 
-export type GitHubCommentReceiptPublisher = {
-  publish: (input: {
-    repository: string;
-    issueNumber: number;
-    body: string;
-  }) => Promise<void>;
-};
+export type GitHubCommentReceiptPublisher = GitHubIssueCommentPublisher;
 
 export type GatewayConfiguration = {
   prisma: PrismaClient;
@@ -100,6 +96,7 @@ export type GatewayConfiguration = {
   githubWorkspaceId: string;
   githubBotMention: string;
   githubBotUserId?: string;
+  githubPullRequestInspector?: GitHubPullRequestInspector;
   githubActions?: GitHubActionsGatewayConfiguration;
   githubCommentReceiptPublisher?: GitHubCommentReceiptPublisher;
   codexProxy?: CodexProxyConfiguration;
@@ -225,10 +222,42 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
       return context.json({ status: 'controlled', receipt }, 202);
     }
 
+    const pullRequestAdmission =
+      invocation?.anchor === 'pull-request'
+        ? async () => {
+            const target = getGitHubIssueCommentReceiptTarget(payload);
+            if (!target || !configuration.githubPullRequestInspector) {
+              return {
+                accepted: false as const,
+                reason: 'pull_request_inspection_unavailable',
+              };
+            }
+            try {
+              const pullRequest =
+                await configuration.githubPullRequestInspector.inspect({
+                  repository: target.repository,
+                  pullRequestNumber: target.issueNumber,
+                });
+              return pullRequest.isFork
+                ? {
+                    accepted: false as const,
+                    reason: 'fork_pull_request',
+                    isFork: true,
+                  }
+                : { accepted: true as const };
+            } catch {
+              return {
+                accepted: false as const,
+                reason: 'pull_request_inspection_failed',
+              };
+            }
+          }
+        : undefined;
     const result = await dispatchInboundInvocation(
       configuration.prisma,
       invocation,
       configuration.pilotAdmission,
+      pullRequestAdmission,
     );
     return context.json(result, result.status === 'unauthorized' ? 403 : 202);
   });

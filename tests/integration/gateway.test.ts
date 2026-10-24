@@ -16,6 +16,9 @@ const prisma = createPrismaClient(environment.databaseUrl);
 const testPrefix = `gateway-integration-${crypto.randomUUID()}`;
 const workspaceId = `${testPrefix}-workspace`;
 const webhookSecret = 'test-webhook-secret';
+const trustedPullRequestInspector = {
+  inspect: async () => ({ isFork: false }),
+};
 
 function payload(overrides: Record<string, unknown> = {}) {
   return {
@@ -75,6 +78,7 @@ test('accepts an authorized signed GitHub command and deduplicates its delivery'
     githubWebhookSecret: webhookSecret,
     githubWorkspaceId: workspaceId,
     githubBotMention: '@deepauto',
+    githubPullRequestInspector: trustedPullRequestInspector,
     pilotAdmission: {
       enabled: true,
       allowedWorkspaceIds: [workspaceId],
@@ -106,6 +110,91 @@ test('accepts an authorized signed GitHub command and deduplicates its delivery'
   ).toBe(1);
 });
 
+test('rejects pull-request comments when fork inspection is unavailable', async () => {
+  await prisma.workspace.create({ data: { id: workspaceId } });
+  await prisma.workspaceMember.create({
+    data: { workspaceId, githubUserId: '8' },
+  });
+  await prisma.workspaceRepository.create({
+    data: { workspaceId, providerRepositoryId: '42' },
+  });
+  const app = createGatewayApp({
+    prisma,
+    githubWebhookSecret: webhookSecret,
+    githubWorkspaceId: workspaceId,
+    githubBotMention: '@deepauto',
+  });
+
+  const response = await app.fetch(
+    signedRequest(payload(), `${testPrefix}-inspection-unavailable`),
+  );
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({ status: 'unauthorized' });
+  expect(
+    await prisma.job.count({ where: { invocation: { workspaceId } } }),
+  ).toBe(0);
+  expect(
+    await prisma.auditEvent.findFirstOrThrow({
+      where: { workspaceId, action: 'github.invocation_rejected' },
+      select: { metadata: true },
+    }),
+  ).toEqual({
+    metadata: {
+      reason: 'pull_request_inspection_unavailable',
+      deliveryId: `${testPrefix}-inspection-unavailable`,
+      commentId: '99',
+      repositoryId: '42',
+      anchor: 'pull-request',
+      isFork: null,
+    },
+  });
+});
+
+test('rejects fork pull-request comments before creating a Job', async () => {
+  await prisma.workspace.create({ data: { id: workspaceId } });
+  await prisma.workspaceMember.create({
+    data: { workspaceId, githubUserId: '8' },
+  });
+  await prisma.workspaceRepository.create({
+    data: { workspaceId, providerRepositoryId: '42' },
+  });
+  const app = createGatewayApp({
+    prisma,
+    githubWebhookSecret: webhookSecret,
+    githubWorkspaceId: workspaceId,
+    githubBotMention: '@deepauto',
+    githubPullRequestInspector: {
+      inspect: async () => ({ isFork: true }),
+    },
+  });
+
+  const response = await app.fetch(
+    signedRequest(payload(), `${testPrefix}-fork-pull-request`),
+  );
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({ status: 'unauthorized' });
+  expect(
+    await prisma.job.count({ where: { invocation: { workspaceId } } }),
+  ).toBe(0);
+  expect(
+    await prisma.auditEvent.findFirstOrThrow({
+      where: { workspaceId, action: 'github.invocation_rejected' },
+      select: { metadata: true },
+    }),
+  ).toEqual({
+    metadata: {
+      reason: 'fork_pull_request',
+      deliveryId: `${testPrefix}-fork-pull-request`,
+      commentId: '99',
+      repositoryId: '42',
+      anchor: 'pull-request',
+      isFork: true,
+    },
+  });
+});
+
 test('pauses approved GitHub commands before creating a Job, then resumes without restarting', async () => {
   await prisma.workspace.create({ data: { id: workspaceId } });
   const member = await prisma.workspaceMember.create({
@@ -120,6 +209,7 @@ test('pauses approved GitHub commands before creating a Job, then resumes withou
     githubWebhookSecret: webhookSecret,
     githubWorkspaceId: workspaceId,
     githubBotMention: '@deepauto',
+    githubPullRequestInspector: trustedPullRequestInspector,
     pilotAdmission: () => pilotAdmission,
   });
 
@@ -179,6 +269,7 @@ test('rejects pilot commands outside the configured member scope and records the
     githubWebhookSecret: webhookSecret,
     githubWorkspaceId: workspaceId,
     githubBotMention: '@deepauto',
+    githubPullRequestInspector: trustedPullRequestInspector,
     pilotAdmission: {
       enabled: true,
       allowedWorkspaceIds: [workspaceId],
@@ -221,6 +312,7 @@ test('rejects signed GitHub commands from an unmapped member', async () => {
     githubWebhookSecret: webhookSecret,
     githubWorkspaceId: workspaceId,
     githubBotMention: '@deepauto',
+    githubPullRequestInspector: trustedPullRequestInspector,
   });
 
   const response = await app.fetch(

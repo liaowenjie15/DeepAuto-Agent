@@ -15,6 +15,7 @@ export {
   findGitHubWorkflowRun,
   type GitHubAppClientOptions,
   type GitHubAppCredentials,
+  type GitHubAppInstallationPermissions,
   type GitHubFetch,
   type GitHubInstallationAccessToken,
   GitHubRequestError,
@@ -27,6 +28,19 @@ export {
   getGitHubWorkflowRun,
   isRetryableGitHubRequestError,
 } from './actions';
+export {
+  createGitHubAppIssueCommentPublisher,
+  createGitHubIssueComment,
+  type GitHubIssueComment,
+  type GitHubIssueCommentPublisher,
+} from './comments';
+export {
+  createGitHubAppPullRequestInspector,
+  getGitHubPullRequest,
+  type GitHubPullRequest,
+  type GitHubPullRequestInspector,
+  type GitHubPullRequestLookup,
+} from './pull-requests';
 export {
   assertGitHubActionsOidcClaims,
   type GitHubActionsOidcClaims,
