@@ -1,5 +1,21 @@
 # B1：改造 Niuma 的可靠 Agent 执行闭环
 
+## 实施状态
+
+**已完成：FIFO、有限基础设施重试、执行器查询/取消契约、持久化取消意图、Worker 外部取消/状态对账与经授权的 GitHub 评论控制入口均已合并到 `main`。** PR #9 的 merge commit `d120496` 来自 `feat/reliable-agent-execution` 提交 `f195241`，在 Redis conversation claim 之后增加持久化队首检查，使较晚的 Job 即使先被 BullMQ 领取也不能越过同一 conversation 中更早的 `QUEUED` 或 `RUNNING` Job；新建的 BullMQ processor 会将 `deferred` Job 移回 delayed 状态并抛出 `DelayedError`，不再把它当作成功完成而丢失。新增集成用例验证三项连续 Job 中第一项失败后，第二、三项仍严格按创建顺序运行。
+
+PR #10 的 merge commit `5c4fca8` 来自 `feat/execution-infrastructure-retries` 提交 `61ab3f5`，只对 GitHub API 的 `408`、`429` 与 `5xx` dispatch 失败进行有界重试；权限、认证、输入和未知错误仍直接终止。Worker 直调默认只尝试一次，BullMQ processor 默认最多三次基础设施尝试并在每次补发前延迟 5 秒；重试会将失败 Job 回置 `QUEUED`，并复用原队列 Job，不引入 payload、队列名、Redis key、数据库 schema 或 migration 变化。为保证源码和构建产物并存测试时的判断一致，重试使用专用错误守卫而非跨模块 `instanceof` 身份。
+
+PR #11（`feat/executor-control`，提交 `918c6c0`、`f846662`）为 GitHub Actions Executor 提供正式的 `start`、`getStatus` 与 `cancel` 契约。受管 workflow 以 `execution_id` 写入 `run-name`；GitHub App 仅查询该精确名称的 `workflow_dispatch` Run，随后才可取消其解析出的 Run ID，避免由调用方传入任意外部 Run ID。取消请求获 GitHub 接受时返回 `cancelling`，只有后续查询观察到 workflow 终态 `cancelled` 才报告取消完成。该 PR 不新增 Gateway 路由、不改变取消授权顺序，也不修改数据库 schema、队列 payload/名称或 Redis key。
+
+PR #12 已以 merge commit `5631e54` 合并到 `main`。该增量新增 `ExecutionCancellationRequest` 和 `EXECUTION_CANCEL` 控制 Outbox：排队 Job 仍可直接终态取消；已有运行中 Execution 的 Job 只原子写入取消意图和控制事件，保留 callback/conversation claim，直到 callback 或状态对账得到真实终态。普通执行队列不会消费控制事件；取消意图会阻止过期恢复把同一远端 Execution 重试为新 Attempt。PR #12 的 Hosted Runner `actionlint`、`workflow-boundary` 和完整 `validate` 均已通过。
+
+PR #13 已于 2026-10-23 02:19（中国标准时间）以 merge commit `5052904` 合并到 `main`。该增量由 Worker 消费 `EXECUTION_CANCEL` 控制 Outbox，以受控 run-name 首次关联 GitHub Actions Run 并持久化其 Run ID/URL；后续取消和状态查询按该受控绑定执行，不接受调用方提供的外部 Run ID。GitHub 接受取消仅将请求记录为 `DISPATCHED`；Worker 以有限次数的状态对账确认真实终态，callback 与对账竞争时由第一个可验证终态原子获胜，超出窗口则记录审计异常。PR #13 的 Hosted Runner `actionlint`、`workflow-boundary` 和完整 `validate` 均已通过。
+
+PR #14 已于 2026-10-24 16:28（中国标准时间）以 merge commit `12ab28a` 合并到 `main`。该增量在已签名、已映射成员且 repository allowlist 通过的 GitHub issue-comment 链路中增加 `@DeepAuto status`、`@DeepAuto cancel` 与仅限 OPERATOR/ADMIN 的显式 `@DeepAuto operator status|cancel`；控制范围固定为当前 workspace/conversation，普通成员仅能操作自己的活跃任务，裸 Job、Execution 或 Run ID 一律不接受。控制结果会审计并通过受控的评论回执发布器返回，不暴露内部标识。PR #14 的 Hosted Runner `actionlint`、`workflow-boundary` 和完整 `validate` 均已通过。
+
+FIFO 增量本地已通过 Worker 单测、Worker/DB typecheck、Biome、Actionlint、`git diff --check` 和完整集成测试（27 项）；GitHub Hosted Runner 的 `actionlint` job 已通过（6 秒）、`workflow-boundary` job 已通过（5 秒）、完整 `validate` job 已通过（43 秒）。PR #10 本地已通过 `bun run build`、`bun run lint`、`bun run typecheck`、受影响单测、`git diff --check` 和完整集成测试（28 项）；Hosted Runner 的 `actionlint`、`workflow-boundary` 和完整 `validate` 均已通过。PR #11 已于 2026-10-22 16:47（中国标准时间）以 merge commit `612038a` 合并到 `main`；本地已通过同一组 build、lint、typecheck、`actionlint 1.7.12`、workflow-boundary、17 项针对性单测和完整集成测试（28 项），其 Hosted Runner 的 `actionlint`、`workflow-boundary` 与完整 `validate` 均已成功。PR #13 本地已通过 `bun run build`、`bun run lint`、`bun run typecheck`、完整单测、完整集成测试（33 项）、workflow-boundary 与 `git diff --check`；PR #14 本地已通过 `bun run build`、`bun run lint`、`bun run typecheck`、完整单测、完整集成测试（36 项）、workflow-boundary 与 `git diff --check`。本阶段的显式产品/安全决策为：首期不启用 session resume；任何恢复能力必须在后续独立任务中重新取得授权、定义同一 conversation/成员/workspace/权限快照约束、恢复窗口与审计规则。
+
 ## 目的
 
 将 Grain/Niuma 已验证的会话续跑、状态可见、取消、失败补发和回执能力，改造成 DeepAuto 的控制面能力。

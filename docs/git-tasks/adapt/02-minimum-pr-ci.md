@@ -1,5 +1,11 @@
 # B2：改造为 DeepAuto 最小 PR CI
 
+## 实施状态
+
+**已实现，仍处于 required-checks 观察期。** `validate.yml` 已在 Pull Request 与 `main` push 上以只读权限执行 `bun install --frozen-lockfile`、Prisma generate、`verify:targets`、`lint`、`typecheck`、`build` 与 `test:unit`；同一 job 还在隔离的 PostgreSQL/Redis service 中执行 `test:integration`。`actionlint` 与 `workflow-boundary` 保持独立、稳定的只读 check。
+
+截至 2026-10-24，PR #12、#13、#14 及其合并后的 `main` push 已连续产生 6 次成功的 `validate` 运行；早期失败是功能实现缺陷修复前的有效失败，不能计入稳定性样本。尚未达到建议的连续一周或至少 10 次有效 PR 运行阈值，且当前没有可读取或已配置的 `main` required-checks 规则。因此下一步是继续观察并在阈值满足后由仓库管理员显式配置 required checks；不在本任务中自动修改分支保护。
+
 ## 目的
 
 以 Grain 的“快速、确定性、分层验证”原则，为 DeepAuto 建立 PR 级 `lint`、`typecheck` 和单元测试门禁。
