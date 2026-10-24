@@ -1,0 +1,29 @@
+[features]
+hooks = true
+
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'bun "$(git rev-parse --show-toplevel)/.codex/hooks/deepauto-context-reminder.ts"'
+timeout = 10
+statusMessage = "Loading DeepAuto development context"
+
+[[hooks.PostToolUse]]
+matcher = "Bash|apply_patch|Edit|Write"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'bun "$(git rev-parse --show-toplevel)/.codex/hooks/deepauto-context-reminder.ts"'
+timeout = 10
+statusMessage = "Checking DeepAuto context"
+
+[[hooks.PostToolUse]]
+matcher = "Bash"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'bun "$(git rev-parse --show-toplevel)/.codex/hooks/delivery-safety-reminder.ts"'
+timeout = 10
+statusMessage = "Checking delivery safety"
