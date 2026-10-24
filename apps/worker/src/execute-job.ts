@@ -1,11 +1,11 @@
 import {
   acceptExecutionCallback,
   beginJobAttempt,
+  createExecutionBootstrapCapability,
   type ExecutionStatus,
   isJobAtConversationHead,
   type PrismaClient,
   releaseConversationClaim,
-  requeueFailedJob,
   startExecution,
   transferConversationClaim,
   tryClaimConversation,
@@ -15,13 +15,15 @@ import {
   type CliHarnessResult,
   type GitHubActionsExecutor,
   isRetryableExecutorStartError,
+  normalizeCliHarnessResult,
   runCliHarness,
 } from '@deepauto/runner-manager';
 import type IORedis from 'ioredis';
 
 const defaultCallbackTtlMilliseconds = 15 * 60 * 1000;
 const maximumCallbackTtlMilliseconds = 60 * 60 * 1000;
-const defaultMaximumInfrastructureAttempts = 1;
+const bootstrapCapabilityTtlMilliseconds = 60_000;
+const callbackDeliverySlackMilliseconds = 2 * 60 * 1000;
 
 const executionStatusByHarnessStatus = {
   completed: 'COMPLETED',
@@ -56,6 +58,7 @@ export type QueuedJobExecutionResult = {
     | 'dispatched'
     | 'deferred'
     | 'retrying'
+    | 'retry_scheduled'
     | 'skipped'
     | 'rejected';
   attemptId?: string;
@@ -66,15 +69,13 @@ export type QueuedJobExecutionResult = {
 export type ExecuteQueuedGitHubActionsJobInput = Pick<
   ExecuteQueuedJobInput,
   'jobId' | 'workerId' | 'callbackTtlMilliseconds'
-> & {
-  maximumInfrastructureAttempts?: number;
-};
+>;
 
 export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
   ExecuteQueuedJobDependencies,
   'runHarness'
 > & {
-  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start'>;
+  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start' | 'getStatus'>;
 };
 
 export function toExecutionStatus(
@@ -93,30 +94,27 @@ function assertCallbackTtl(value: number): void {
   }
 }
 
-function assertMaximumInfrastructureAttempts(value: number): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(
-      'Maximum infrastructure attempts must be a positive integer',
-    );
-  }
-}
-
 async function failExecutionBeforeDispatch(
   prisma: PrismaClient,
   execution: { id: string; callbackClaim: { id: string } | null },
   attemptId: string,
   reason: string,
   now: Date,
-): Promise<boolean> {
-  const callback = await acceptExecutionCallback(prisma, {
+): Promise<{ accepted: boolean; retryScheduled?: true }> {
+  return acceptExecutionCallback(prisma, {
     attemptId,
     callbackClaimId: execution.callbackClaim?.id ?? '',
-    status: 'FAILED',
-    reason,
+    result: {
+      status: 'FAILED',
+      failureCategory: 'INFRASTRUCTURE_FAILED',
+      safeSummary: reason,
+      retryable: true,
+      artifacts: [],
+      finishedAt: now.toISOString(),
+    },
     events: [],
     now,
   });
-  return callback.accepted;
 }
 
 export async function executeQueuedJob(
@@ -190,8 +188,7 @@ export async function executeQueuedJob(
     const callback = await acceptExecutionCallback(dependencies.prisma, {
       attemptId: attempt.id,
       callbackClaimId: execution.callbackClaim?.id ?? '',
-      status: toExecutionStatus(result.status),
-      reason: result.reason,
+      result: normalizeCliHarnessResult(result, { finishedAt: now() }),
       events: result.events,
       now: now(),
     });
@@ -204,7 +201,7 @@ export async function executeQueuedJob(
     }
 
     return {
-      status: result.status,
+      status: callback.retryScheduled ? 'retry_scheduled' : result.status,
       attemptId: attempt.id,
       executionId: execution.id,
     };
@@ -224,10 +221,6 @@ export async function executeQueuedGitHubActionsJob(
   const callbackTtlMilliseconds =
     input.callbackTtlMilliseconds ?? defaultCallbackTtlMilliseconds;
   assertCallbackTtl(callbackTtlMilliseconds);
-  const maximumInfrastructureAttempts =
-    input.maximumInfrastructureAttempts ?? defaultMaximumInfrastructureAttempts;
-  assertMaximumInfrastructureAttempts(maximumInfrastructureAttempts);
-
   const job = await dependencies.prisma.job.findUnique({
     where: { id: input.jobId },
     select: { conversationKey: true },
@@ -259,11 +252,21 @@ export async function executeQueuedGitHubActionsJob(
     if (!attempt) return { status: 'skipped' };
 
     const now = dependencies.now ?? (() => new Date());
+    const bootstrapCapability = createExecutionBootstrapCapability();
+    const callbackExpiresAt = new Date(
+      now().getTime() +
+        callbackTtlMilliseconds +
+        callbackDeliverySlackMilliseconds,
+    );
     const execution = await startExecution(
       dependencies.prisma,
       {
         attemptId: attempt.id,
-        callbackExpiresAt: new Date(now().getTime() + callbackTtlMilliseconds),
+        callbackExpiresAt,
+        bootstrapCapabilityHash: bootstrapCapability.hash,
+        bootstrapExpiresAt: new Date(
+          now().getTime() + bootstrapCapabilityTtlMilliseconds,
+        ),
       },
       now(),
     );
@@ -272,10 +275,10 @@ export async function executeQueuedGitHubActionsJob(
       job.conversationKey,
       input.workerId,
       execution.id,
-      callbackTtlMilliseconds,
+      callbackTtlMilliseconds + callbackDeliverySlackMilliseconds,
     );
     if (!lockTransferred) {
-      const accepted = await failExecutionBeforeDispatch(
+      const callback = await failExecutionBeforeDispatch(
         dependencies.prisma,
         execution,
         attempt.id,
@@ -283,7 +286,11 @@ export async function executeQueuedGitHubActionsJob(
         now(),
       );
       return {
-        status: accepted ? 'failed' : 'rejected',
+        status: callback.retryScheduled
+          ? 'retry_scheduled'
+          : callback.accepted
+            ? 'failed'
+            : 'rejected',
         attemptId: attempt.id,
         executionId: execution.id,
       };
@@ -293,6 +300,7 @@ export async function executeQueuedGitHubActionsJob(
     try {
       const started = await dependencies.githubActionsExecutor.start({
         executionId: execution.id,
+        bootstrapCapability: bootstrapCapability.value,
       });
       releaseConversation = false;
       return {
@@ -302,20 +310,33 @@ export async function executeQueuedGitHubActionsJob(
         executionRef: started.executionRef,
       };
     } catch (error) {
-      const accepted = await failExecutionBeforeDispatch(
-        dependencies.prisma,
-        execution,
-        attempt.id,
-        'GitHub Actions dispatch failed before the execution started',
-        now(),
-      );
-      const retried =
-        accepted &&
-        isRetryableExecutorStartError(error) &&
-        attempt.number < maximumInfrastructureAttempts &&
-        (await requeueFailedJob(dependencies.prisma, input.jobId));
+      const retryable = isRetryableExecutorStartError(error);
+      const callback = await acceptExecutionCallback(dependencies.prisma, {
+        attemptId: attempt.id,
+        callbackClaimId: execution.callbackClaim?.id ?? '',
+        result: {
+          status: 'FAILED',
+          failureCategory: retryable
+            ? 'INFRASTRUCTURE_FAILED'
+            : 'POLICY_REJECTED',
+          safeSummary: retryable
+            ? 'The execution environment was unavailable and will retry.'
+            : 'GitHub Actions rejected the execution dispatch.',
+          retryable,
+          artifacts: [],
+          finishedAt: now().toISOString(),
+        },
+        events: [],
+        now: now(),
+      });
+      const accepted = callback.accepted;
+      const retryScheduled = callback.retryScheduled;
       return {
-        status: retried ? 'retrying' : accepted ? 'failed' : 'rejected',
+        status: retryScheduled
+          ? 'retry_scheduled'
+          : accepted
+            ? 'failed'
+            : 'rejected',
         attemptId: attempt.id,
         executionId: execution.id,
       };

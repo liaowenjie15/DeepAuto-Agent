@@ -12,7 +12,6 @@ export {
   createGitHubAppWorkflowDispatcher,
   createGitHubInstallationAccessToken,
   dispatchGitHubWorkflow,
-  findGitHubWorkflowRun,
   type GitHubAppClientOptions,
   type GitHubAppCredentials,
   type GitHubAppInstallationPermissions,
@@ -24,7 +23,6 @@ export {
   type GitHubWorkflowDispatcher,
   type GitHubWorkflowRun,
   type GitHubWorkflowRunCancellation,
-  type GitHubWorkflowRunLookup,
   getGitHubWorkflowRun,
   isRetryableGitHubRequestError,
 } from './actions';

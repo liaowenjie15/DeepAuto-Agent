@@ -3,7 +3,11 @@ import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import {
   type ExecutionArtifactName,
+  type ExecutionArtifactReference,
   type ExecutionEvent,
+  type ExecutionFailureCategory,
+  type ExecutionLogReference,
+  type ExecutionResult,
   executionArtifactNameSchema,
   executionEventSchema,
 } from '@deepauto/contracts';
@@ -50,7 +54,111 @@ export type CliHarnessOptions = {
   baseEnvironment?: NodeJS.ProcessEnv;
 };
 
+export type ExecutionResultNormalizationOptions = {
+  finishedAt?: Date;
+  logReference?: ExecutionLogReference;
+};
+
 const inheritedEnvironmentKeys = ['HOME', 'LANG', 'LC_ALL', 'PATH', 'TMPDIR'];
+
+const localSandboxLogRetentionMilliseconds = 30 * 24 * 60 * 60 * 1000;
+
+function failureCategoryForHarnessResult(
+  result: CliHarnessResult,
+): ExecutionFailureCategory {
+  if (result.status === 'cancelled') return 'CANCELLED';
+  if (result.status === 'timed_out') return 'TIMEOUT';
+  if (
+    result.reason === 'CLI process failed to start' ||
+    result.reason ===
+      'CLI harness failed before producing an execution result' ||
+    result.reason?.startsWith('CLI process exited with code')
+  ) {
+    return 'INFRASTRUCTURE_FAILED';
+  }
+  if (result.reason?.startsWith('CLI harness protocol violation')) {
+    return 'CALLBACK_REJECTED';
+  }
+  return 'VALIDATION_FAILED';
+}
+
+function safeSummaryForHarnessResult(result: CliHarnessResult): string {
+  if (result.status === 'completed') return 'Execution completed successfully.';
+  if (result.status === 'cancelled') return 'Execution was cancelled.';
+  if (result.status === 'timed_out') {
+    return 'Execution exceeded its deadline and will retry.';
+  }
+  if (result.reason === 'CLI process failed to start') {
+    return 'The execution environment was unavailable and will retry.';
+  }
+  if (result.reason?.startsWith('CLI harness protocol violation')) {
+    return 'The execution result was rejected by the result protocol.';
+  }
+  return 'Execution validation failed.';
+}
+
+function artifactReferences(
+  artifacts: CliHarnessResult['artifacts'],
+): ExecutionArtifactReference[] {
+  return Object.entries(artifacts).flatMap(([name, reference]) =>
+    reference
+      ? [
+          {
+            name: executionArtifactNameSchema.parse(name),
+            reference,
+          },
+        ]
+      : [],
+  );
+}
+
+export function createLocalSandboxLogReference(
+  reference: string,
+  now = new Date(),
+): ExecutionLogReference {
+  return {
+    provider: 'local_sandbox',
+    reference,
+    expiresAt: new Date(
+      now.getTime() + localSandboxLogRetentionMilliseconds,
+    ).toISOString(),
+  };
+}
+
+export function normalizeCliHarnessResult(
+  result: CliHarnessResult,
+  options: ExecutionResultNormalizationOptions = {},
+): ExecutionResult {
+  const finishedAt = options.finishedAt ?? new Date();
+  if (result.status === 'completed') {
+    return {
+      status: 'COMPLETED',
+      safeSummary: safeSummaryForHarnessResult(result),
+      retryable: false,
+      logReference: options.logReference,
+      artifacts: artifactReferences(result.artifacts),
+      finishedAt: finishedAt.toISOString(),
+    };
+  }
+
+  const failureCategory = failureCategoryForHarnessResult(result);
+  return {
+    status:
+      result.status === 'cancelled'
+        ? 'CANCELLED'
+        : result.status === 'timed_out'
+          ? 'TIMED_OUT'
+          : 'FAILED',
+    failureCategory,
+    safeSummary: safeSummaryForHarnessResult(result),
+    retryable:
+      failureCategory === 'INFRASTRUCTURE_FAILED' ||
+      failureCategory === 'TIMEOUT',
+    logReference: options.logReference,
+    artifacts: artifactReferences(result.artifacts),
+    finishedAt: finishedAt.toISOString(),
+  };
+}
 
 export function buildCliEnvironment(
   credentialClaimId?: string,

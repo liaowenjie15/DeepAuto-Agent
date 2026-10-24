@@ -17,6 +17,7 @@ const githubActionsExecutorConfigSchema = z.object({
 
 const githubActionsExecutionRequestSchema = z.object({
   executionId: z.string().trim().min(1),
+  bootstrapCapability: z.string().trim().min(43).max(128).optional(),
   externalRunId: z.bigint().positive().optional(),
 });
 
@@ -136,7 +137,12 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
       repository: this.#configuration.repository,
       workflow: this.#configuration.workflow,
       ref: this.#configuration.workflowRef,
-      inputs: { execution_id: parsedRequest.executionId },
+      inputs: {
+        execution_id: parsedRequest.executionId,
+        ...(parsedRequest.bootstrapCapability
+          ? { bootstrap_capability: parsedRequest.bootstrapCapability }
+          : {}),
+      },
     };
 
     try {
@@ -161,11 +167,7 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
           repository: this.#configuration.repository,
           runId: toGitHubRunId(parsedRequest.externalRunId),
         })
-      : await this.controller.findRun({
-          repository: this.#configuration.repository,
-          workflow: this.#configuration.workflow,
-          executionId: parsedRequest.executionId,
-        });
+      : null;
     return {
       executionRef: executionRef(
         this.#configuration.repository,
@@ -186,11 +188,7 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
           repository: this.#configuration.repository,
           runId: toGitHubRunId(parsedRequest.externalRunId),
         })
-      : await this.controller.findRun({
-          repository: this.#configuration.repository,
-          workflow: this.#configuration.workflow,
-          executionId: parsedRequest.executionId,
-        });
+      : null;
     const state = executionStateForWorkflowRun(workflowRun);
     if (!workflowRun || (state !== 'queued' && state !== 'running')) {
       return {

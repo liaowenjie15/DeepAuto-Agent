@@ -107,9 +107,12 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
         ref: 'refs/heads/main',
         event_name: 'workflow_dispatch',
         run_id: '123',
+        run_attempt: 1,
       }),
     },
     executionService: {
+      consumeExecutionBootstrapCapability: async () => true,
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async (_prisma, executionId) => ({
         executionId,
         attemptId: 'attempt-1',
@@ -127,7 +130,11 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
     '/github/actions/executions/execution-1/bootstrap',
     {
       method: 'POST',
-      headers: { authorization: 'Bearer oidc-token' },
+      headers: {
+        authorization: 'Bearer oidc-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ capability: 'a'.repeat(43) }),
     },
   );
 
@@ -166,6 +173,7 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
         ref: 'refs/heads/main',
         event_name: 'workflow_dispatch',
         run_id: '123',
+        run_attempt: 1,
       }),
     },
     codexProxy: {
@@ -183,6 +191,8 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
       },
     },
     executionService: {
+      consumeExecutionBootstrapCapability: async () => true,
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async (_prisma, executionId) =>
         executionIsActive
           ? {
@@ -271,12 +281,15 @@ test('accepts a terminal callback without exposing the callback claim', async ()
         ref: 'refs/heads/main',
         event_name: 'workflow_dispatch',
         run_id: '123',
+        run_attempt: 1,
       }),
     },
     onExecutionCallbackAccepted: async (executionId) => {
       releasedExecutionId = executionId;
     },
     executionService: {
+      consumeExecutionBootstrapCapability: async () => true,
+      bindExecutionToExternalRun: async () => true,
       getActiveExecutionBootstrap: async () => null,
       acceptExecutionCallbackByExecutionId: async (_prisma, input) => {
         callbackInput = input;
@@ -294,7 +307,14 @@ test('accepts a terminal callback without exposing the callback claim', async ()
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        status: 'COMPLETED',
+        attemptId: 'attempt-1',
+        result: {
+          status: 'COMPLETED',
+          safeSummary: 'Execution completed successfully.',
+          retryable: false,
+          artifacts: [],
+          finishedAt: '2026-10-25T00:00:00.000Z',
+        },
         events: [
           { type: 'started', attemptId: 'attempt-1' },
           { type: 'completed', attemptId: 'attempt-1' },
@@ -307,7 +327,8 @@ test('accepts a terminal callback without exposing the callback claim', async ()
   expect(await response.json()).toEqual({ status: 'accepted' });
   expect(callbackInput).toMatchObject({
     executionId: 'execution-1',
-    status: 'COMPLETED',
+    attemptId: 'attempt-1',
+    result: { status: 'COMPLETED' },
   });
   expect(callbackInput).not.toHaveProperty('callbackClaimId');
   expect(releasedExecutionId).toBe('execution-1');

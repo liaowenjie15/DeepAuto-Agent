@@ -31,8 +31,11 @@
 
 ## 人工决策
 
-- 失败类别枚举、日志保留期、谁可以查看原始执行日志。
-- 是否将测试结果作为独立结构化字段，还是挂在产物引用中。
+- 已确认失败类别：`VALIDATION_FAILED`、`POLICY_REJECTED`、`CANCELLED`、`TIMEOUT`、`INFRASTRUCTURE_FAILED`、`CALLBACK_REJECTED`。仅基础设施失败和超时自动重试，最多两次，使用指数退避。
+- Gateway 仅持久化日志引用、期限和安全摘要；GitHub Actions 原始日志由 GitHub 保留，Local Sandbox 原始日志保留 30 天。
+- 原始日志仅仓库维护者和指定安全负责人可访问，并要求审计记录；普通成员、任务发起者、外部贡献者和 Agent 仅可获得安全摘要。
+- 测试结果采用独立结构化摘要，详细报告作为 artifact 引用保存。
+- 安全摘要限制长度并拒绝 token、私钥、数据库 URL、完整环境变量和原始命令输出。
 
 ## 非目标
 

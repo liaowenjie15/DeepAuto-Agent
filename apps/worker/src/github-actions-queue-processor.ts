@@ -7,7 +7,6 @@ import {
 
 const defaultConversationDeferMilliseconds = 1_000;
 const defaultInfrastructureRetryMilliseconds = 5_000;
-const defaultMaximumInfrastructureAttempts = 3;
 
 export type GitHubActionsQueueData = {
   jobId: string;
@@ -18,7 +17,6 @@ export type GitHubActionsQueueProcessorOptions = {
   callbackTtlMilliseconds?: number;
   conversationDeferMilliseconds?: number;
   infrastructureRetryMilliseconds?: number;
-  maximumInfrastructureAttempts?: number;
   now?: () => number;
 };
 
@@ -48,16 +46,9 @@ export function createGitHubActionsQueueProcessor(
   const infrastructureRetryMilliseconds =
     options.infrastructureRetryMilliseconds ??
     defaultInfrastructureRetryMilliseconds;
-  const maximumInfrastructureAttempts =
-    options.maximumInfrastructureAttempts ??
-    defaultMaximumInfrastructureAttempts;
   assertPositiveInteger(
     infrastructureRetryMilliseconds,
     'Infrastructure retry delay',
-  );
-  assertPositiveInteger(
-    maximumInfrastructureAttempts,
-    'Maximum infrastructure attempts',
   );
   const now = options.now ?? Date.now;
 
@@ -67,7 +58,6 @@ export function createGitHubActionsQueueProcessor(
         jobId: job.data.jobId,
         workerId: options.workerId,
         callbackTtlMilliseconds: options.callbackTtlMilliseconds,
-        maximumInfrastructureAttempts,
       },
       dependencies,
     );

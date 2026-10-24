@@ -1,6 +1,7 @@
 import { expect, it } from 'bun:test';
 import {
   executionEventSchema,
+  executionResultSchema,
   inboundInvocationSchema,
   invocationSchema,
 } from './index';
@@ -75,5 +76,47 @@ it('accepts only structured execution events with task-bound IDs', () => {
   expect(
     executionEventSchema.safeParse({ type: 'completed', attemptId: ' ' })
       .success,
+  ).toBe(false);
+});
+
+it('accepts a safe structured terminal execution result', () => {
+  expect(
+    executionResultSchema.safeParse({
+      status: 'TIMED_OUT',
+      failureCategory: 'TIMEOUT',
+      safeSummary: 'The execution exceeded its deadline and will retry.',
+      retryable: true,
+      logReference: {
+        provider: 'local_sandbox',
+        reference: 'execution-1/attempt-1.log',
+        expiresAt: '2026-11-24T00:00:00.000Z',
+      },
+      testSummary: { total: 3, passed: 2, failed: 1, skipped: 0 },
+      artifacts: [{ name: 'test_result', reference: 'artifact://test-1' }],
+      finishedAt: '2026-10-25T00:00:00.000Z',
+    }).success,
+  ).toBe(true);
+});
+
+it('rejects unsafe summaries and invalid retry policies', () => {
+  expect(
+    executionResultSchema.safeParse({
+      status: 'FAILED',
+      failureCategory: 'VALIDATION_FAILED',
+      safeSummary: 'DATABASE_URL=postgresql://user:secret@example.test/db',
+      retryable: false,
+      artifacts: [],
+      finishedAt: '2026-10-25T00:00:00.000Z',
+    }).success,
+  ).toBe(false);
+  expect(
+    executionResultSchema.safeParse({
+      status: 'FAILED',
+      failureCategory: 'VALIDATION_FAILED',
+      safeSummary: 'Validation failed.',
+      retryable: true,
+      artifacts: [],
+      finishedAt: '2026-10-25T00:00:00.000Z',
+    }).success,
   ).toBe(false);
 });

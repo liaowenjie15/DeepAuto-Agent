@@ -20,6 +20,7 @@ const claimsSchema = z.object({
   ref: z.string().trim().min(1),
   event_name: z.string().trim().min(1),
   run_id: z.union([z.string().trim().min(1), z.number().int().positive()]),
+  run_attempt: z.coerce.number().int().positive(),
 });
 
 export type GitHubActionsOidcTrustPolicy = z.input<typeof trustPolicySchema>;
