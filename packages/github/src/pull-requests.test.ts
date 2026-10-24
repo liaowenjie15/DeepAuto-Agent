@@ -1,9 +1,7 @@
 import { expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
-import {
-  createGitHubAppPullRequestInspector,
-  type GitHubFetch,
-} from './pull-requests';
+import type { GitHubFetch } from './actions';
+import { createGitHubAppPullRequestInspector } from './pull-requests';
 
 test('treats a pull request with an unavailable head repository as a fork', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 });

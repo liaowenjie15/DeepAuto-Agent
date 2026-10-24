@@ -1,9 +1,7 @@
 import { expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
-import {
-  createGitHubAppIssueCommentPublisher,
-  type GitHubFetch,
-} from './comments';
+import type { GitHubFetch } from './actions';
+import { createGitHubAppIssueCommentPublisher } from './comments';
 
 test('publishes a repository-scoped receipt with only issues write permission', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 });
