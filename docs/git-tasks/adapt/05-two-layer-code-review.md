@@ -1,5 +1,11 @@
 # B5：实施双层代码审查模型
 
+## 实施状态
+
+**进行中。** 以 `origin/main`（已含 B4）创建 `feat/two-layer-code-review`。新增本地只读审查协议与 `bun run review:plan -- <base-ref>`：它只读取 Git diff 的路径，普通变更要求 `code-reviewer`，而 Gateway、Worker、GitHub、Runner Manager、DB 与 `.github/**` 改动额外要求 `execution-safety-reviewer`。计划输出不包含 diff、用户数据或配置内容。
+
+已确定的治理规则：阻塞项仅可由仓库维护者或指定安全负责人以书面 PR 记录豁免；Agent 可修复后重复两层审查，最多两轮，仍有阻塞项必须人工接手。审查器不得批准合并、部署或执行远程操作，且不替代 lint/typecheck/unit test。
+
 ## 目的
 
 在通用代码审查之外，增加仅针对 DeepAuto 控制面和执行边界的安全审查。

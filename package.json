@@ -17,6 +17,7 @@
     "dev": "turbo dev",
     "lint": "bun run verify:targets && turbo lint && biome check package.json biome.json turbo.json tsconfig.base.json scripts",
     "lint:fix": "turbo lint:fix && biome check . --write",
+    "review:plan": "bun scripts/review-plan.ts",
     "typecheck": "bun run verify:targets && bun run db:generate && tsc -p scripts/tsconfig.json --noEmit && turbo typecheck",
     "test": "bun run test:unit",
     "test:unit": "bun run verify:targets && bun test scripts && turbo test:unit",
