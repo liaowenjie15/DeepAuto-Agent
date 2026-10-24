@@ -42,7 +42,10 @@ export {
 
 const issueCommentSchema = z.object({
   action: z.literal('created'),
-  repository: z.object({ id: z.union([z.string(), z.number()]) }),
+  repository: z.object({
+    id: z.union([z.string(), z.number()]),
+    full_name: z.string().trim().min(1).optional(),
+  }),
   issue: z.object({
     number: z.number().int().positive(),
     pull_request: z.unknown().optional(),
@@ -108,4 +111,21 @@ export function normalizeGitHubIssueComment(
     idempotencyKey: `github:comment:${parsed.data.comment.id}`,
     receivedAt: input.receivedAt,
   });
+}
+
+export type GitHubIssueCommentReceiptTarget = {
+  repository: string;
+  issueNumber: number;
+};
+
+export function getGitHubIssueCommentReceiptTarget(
+  payload: unknown,
+): GitHubIssueCommentReceiptTarget | null {
+  const parsed = issueCommentSchema.safeParse(payload);
+  if (!parsed.success) return null;
+
+  const repository = parsed.data.repository.full_name?.trim();
+  if (!repository) return null;
+
+  return { repository, issueNumber: parsed.data.issue.number };
 }

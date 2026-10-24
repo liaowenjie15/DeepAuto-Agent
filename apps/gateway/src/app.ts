@@ -9,6 +9,7 @@ import {
 import {
   type GitHubActionsOidcTokenVerifier,
   type GitHubActionsOidcTrustPolicy,
+  getGitHubIssueCommentReceiptTarget,
   issueExecutionProxyToken,
   normalizeGitHubIssueComment,
   verifyExecutionProxyToken,
@@ -18,9 +19,15 @@ import {
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
+  dispatchExecutionControl,
   dispatchInboundInvocation,
   type PilotAdmissionProvider,
 } from './dispatcher';
+import {
+  executionControlReceipt,
+  hasGitHubExecutionControlPrefix,
+  parseGitHubExecutionControlCommand,
+} from './execution-control-command';
 
 const executionCallbackSchema = z.object({
   status: z.enum(['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT']),
@@ -77,12 +84,21 @@ export type GatewayExecutionService = {
   ) => Promise<{ accepted: boolean }>;
 };
 
+export type GitHubCommentReceiptPublisher = {
+  publish: (input: {
+    repository: string;
+    issueNumber: number;
+    body: string;
+  }) => Promise<void>;
+};
+
 export type GatewayConfiguration = {
   prisma: PrismaClient;
   githubWebhookSecret: string;
   githubWorkspaceId: string;
   githubBotMention: string;
   githubActions?: GitHubActionsGatewayConfiguration;
+  githubCommentReceiptPublisher?: GitHubCommentReceiptPublisher;
   codexProxy?: CodexProxyConfiguration;
   pilotAdmission?: PilotAdmissionProvider;
   onExecutionCallbackAccepted?: (executionId: string) => Promise<void>;
@@ -160,14 +176,49 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
     const deliveryId = context.req.header('x-github-delivery');
     if (!deliveryId) return context.json({ error: 'missing delivery ID' }, 400);
 
+    const invocation = normalizeGitHubIssueComment(payload, {
+      workspaceId: configuration.githubWorkspaceId,
+      deliveryId,
+      receivedAt: new Date().toISOString(),
+      botMention: configuration.githubBotMention,
+    });
+    const command = invocation
+      ? parseGitHubExecutionControlCommand(invocation.instruction)
+      : null;
+    if (
+      invocation &&
+      !command &&
+      hasGitHubExecutionControlPrefix(invocation.instruction)
+    ) {
+      return context.json({ status: 'ignored' }, 202);
+    }
+    if (command) {
+      const result = await dispatchExecutionControl(
+        configuration.prisma,
+        invocation,
+        command,
+      );
+      if (result.status !== 'controlled') {
+        return context.json(
+          result,
+          result.status === 'unauthorized' ? 403 : 202,
+        );
+      }
+
+      const receipt = executionControlReceipt(result.result);
+      const target = getGitHubIssueCommentReceiptTarget(payload);
+      if (target && configuration.githubCommentReceiptPublisher) {
+        await configuration.githubCommentReceiptPublisher.publish({
+          ...target,
+          body: receipt,
+        });
+      }
+      return context.json({ status: 'controlled', receipt }, 202);
+    }
+
     const result = await dispatchInboundInvocation(
       configuration.prisma,
-      normalizeGitHubIssueComment(payload, {
-        workspaceId: configuration.githubWorkspaceId,
-        deliveryId,
-        receivedAt: new Date().toISOString(),
-        botMention: configuration.githubBotMention,
-      }),
+      invocation,
       configuration.pilotAdmission,
     );
     return context.json(result, result.status === 'unauthorized' ? 403 : 202);

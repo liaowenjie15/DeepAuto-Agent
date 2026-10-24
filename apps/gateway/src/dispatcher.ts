@@ -1,7 +1,9 @@
 import type { InboundInvocation } from '@deepauto/contracts';
 import {
   authorizeInboundInvocation,
+  controlConversationExecution,
   createOrGetInvocationJob,
+  type ExecutionControlResult,
   type PrismaClient,
 } from '@deepauto/db';
 import {
@@ -18,6 +20,11 @@ export type DispatchResult =
 export type PilotAdmissionProvider =
   | PilotAdmissionConfiguration
   | (() => PilotAdmissionConfiguration);
+
+export type ExecutionControlDispatchResult =
+  | { status: 'ignored' }
+  | { status: 'unauthorized' }
+  | { status: 'controlled'; result: ExecutionControlResult };
 
 function resolvePilotAdmission(
   provider: PilotAdmissionProvider,
@@ -73,5 +80,28 @@ export async function dispatchInboundInvocation(
     status: 'accepted',
     jobId: created.job.id,
     created: created.created,
+  };
+}
+
+export async function dispatchExecutionControl(
+  prisma: PrismaClient,
+  invocation: InboundInvocation | null,
+  command: { command: 'status' | 'cancel'; scope: 'self' | 'workspace' },
+): Promise<ExecutionControlDispatchResult> {
+  if (!invocation) return { status: 'ignored' };
+
+  const authorized = await authorizeInboundInvocation(prisma, invocation);
+  if (!authorized) return { status: 'unauthorized' };
+
+  return {
+    status: 'controlled',
+    result: await controlConversationExecution(prisma, {
+      workspaceId: authorized.workspaceId,
+      actorId: authorized.actorId,
+      memberRole: authorized.memberRole,
+      conversationKey: authorized.conversationKey,
+      command: command.command,
+      scope: command.scope,
+    }),
   };
 }
