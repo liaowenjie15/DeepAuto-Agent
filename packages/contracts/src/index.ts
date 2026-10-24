@@ -30,6 +30,7 @@ export const executionArtifactNameSchema = z.enum([
   'test_result',
   'commit_sha',
   'pull_request',
+  'prompt_layers',
   'workspace',
 ]);
 
