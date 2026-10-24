@@ -19,7 +19,6 @@ const workflowRun: GitHubWorkflowRun = {
 function controller(
   overrides: {
     dispatch?: (input: GitHubWorkflowDispatch) => Promise<void>;
-    findRun?: () => Promise<typeof workflowRun | null>;
     getRun?: (runId: number) => Promise<typeof workflowRun>;
     cancelRun?: (runId: number) => Promise<void>;
   } = {},
@@ -27,9 +26,6 @@ function controller(
   return {
     async dispatch(input: GitHubWorkflowDispatch) {
       await overrides.dispatch?.(input);
-    },
-    async findRun() {
-      return (await overrides.findRun?.()) ?? null;
     },
     async getRun(input: { runId: number }) {
       return (await overrides.getRun?.(input.runId)) ?? workflowRun;
@@ -40,7 +36,7 @@ function controller(
   };
 }
 
-test('dispatches the fixed sandbox workflow with only an execution reference', async () => {
+test('dispatches the fixed sandbox workflow with a one-time bootstrap capability', async () => {
   const dispatches: GitHubWorkflowDispatch[] = [];
   const executor = new GitHubActionsExecutor(
     {
@@ -55,18 +51,24 @@ test('dispatches the fixed sandbox workflow with only an execution reference', a
     }),
   );
 
-  await expect(executor.start({ executionId: 'execution-1' })).resolves.toEqual(
-    {
-      executionRef:
-        'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
-    },
-  );
+  await expect(
+    executor.start({
+      executionId: 'execution-1',
+      bootstrapCapability: 'a'.repeat(43),
+    }),
+  ).resolves.toEqual({
+    executionRef:
+      'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
+  });
   expect(dispatches).toEqual([
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
       workflow: 'deepauto-execute.yml',
       ref: 'main',
-      inputs: { execution_id: 'execution-1' },
+      inputs: {
+        execution_id: 'execution-1',
+        bootstrap_capability: 'a'.repeat(43),
+      },
     },
   ]);
 });
@@ -123,7 +125,7 @@ test('preserves whether a failed GitHub dispatch is retryable', async () => {
   } satisfies Partial<ExecutorStartError>);
 });
 
-test('maps a matched GitHub Actions run to executor status', async () => {
+test('maps a persisted GitHub Actions run to executor status', async () => {
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
@@ -131,14 +133,14 @@ test('maps a matched GitHub Actions run to executor status', async () => {
       workflowRef: 'main',
     },
     controller({
-      async findRun() {
+      async getRun() {
         return workflowRun;
       },
     }),
   );
 
   await expect(
-    executor.getStatus({ executionId: 'execution-1' }),
+    executor.getStatus({ executionId: 'execution-1', externalRunId: 41n }),
   ).resolves.toEqual({
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
@@ -148,7 +150,7 @@ test('maps a matched GitHub Actions run to executor status', async () => {
   });
 });
 
-test('cancels only the run resolved for an active execution', async () => {
+test('cancels only the persisted run for an active execution', async () => {
   const cancelledRunIds: number[] = [];
   const executor = new GitHubActionsExecutor(
     {
@@ -157,7 +159,7 @@ test('cancels only the run resolved for an active execution', async () => {
       workflowRef: 'main',
     },
     controller({
-      async findRun() {
+      async getRun() {
         return { ...workflowRun, status: 'queued' };
       },
       async cancelRun(runId) {
@@ -167,7 +169,7 @@ test('cancels only the run resolved for an active execution', async () => {
   );
 
   await expect(
-    executor.cancel({ executionId: 'execution-1' }),
+    executor.cancel({ executionId: 'execution-1', externalRunId: 41n }),
   ).resolves.toEqual({
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
@@ -187,7 +189,7 @@ test('does not cancel a completed GitHub Actions run', async () => {
       workflowRef: 'main',
     },
     controller({
-      async findRun() {
+      async getRun() {
         return {
           ...workflowRun,
           status: 'completed',
@@ -201,7 +203,7 @@ test('does not cancel a completed GitHub Actions run', async () => {
   );
 
   await expect(
-    executor.cancel({ executionId: 'execution-1' }),
+    executor.cancel({ executionId: 'execution-1', externalRunId: 41n }),
   ).resolves.toEqual({
     executionRef:
       'github-actions:liaowenjie15/deepauto-harness-sandbox:execution-1',
@@ -213,7 +215,6 @@ test('does not cancel a completed GitHub Actions run', async () => {
 });
 
 test('uses a persisted Run ID without scanning workflow runs again', async () => {
-  let findRunCalls = 0;
   const runIds: number[] = [];
   const executor = new GitHubActionsExecutor(
     {
@@ -222,10 +223,6 @@ test('uses a persisted Run ID without scanning workflow runs again', async () =>
       workflowRef: 'main',
     },
     controller({
-      async findRun() {
-        findRunCalls += 1;
-        return null;
-      },
       async getRun(runId) {
         runIds.push(runId);
         return { ...workflowRun, status: 'completed', conclusion: 'success' };
@@ -236,6 +233,5 @@ test('uses a persisted Run ID without scanning workflow runs again', async () =>
   await expect(
     executor.getStatus({ executionId: 'execution-1', externalRunId: 41n }),
   ).resolves.toMatchObject({ state: 'completed', externalRunId: 41n });
-  expect(findRunCalls).toBe(0);
   expect(runIds).toEqual([41]);
 });

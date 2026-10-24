@@ -5,6 +5,7 @@ import {
 import {
   acceptExecutionCallbackByExecutionId,
   bindExecutionToExternalRun,
+  consumeExecutionBootstrapCapability,
   type ExecutionBootstrap,
   type ExecutionCallbackByExecutionIdInput,
   getActiveExecutionBootstrap,
@@ -42,6 +43,10 @@ const executionCallbackSchema = z.object({
   attemptId: z.string().trim().min(1),
   result: executionResultSchema,
   events: z.array(executionEventSchema),
+});
+
+const executionBootstrapSchema = z.object({
+  capability: z.string().trim().min(43).max(128),
 });
 
 const codexProxyConfigurationSchema = z.object({
@@ -82,10 +87,19 @@ export type GitHubActionsGatewayConfiguration = {
 };
 
 export type GatewayExecutionService = {
+  consumeExecutionBootstrapCapability: (
+    prisma: PrismaClient,
+    executionId: string,
+    capability: string,
+    externalRunId: bigint,
+    externalRunAttempt: number,
+    now?: Date,
+  ) => Promise<boolean>;
   bindExecutionToExternalRun: (
     prisma: PrismaClient,
     executionId: string,
     externalRunId: bigint,
+    externalRunAttempt: number,
   ) => Promise<boolean>;
   getActiveExecutionBootstrap: (
     prisma: PrismaClient,
@@ -154,6 +168,7 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
     ({
       getActiveExecutionBootstrap,
       bindExecutionToExternalRun,
+      consumeExecutionBootstrapCapability,
       acceptExecutionCallbackByExecutionId,
     } satisfies GatewayExecutionService);
   const codexProxy = configuration.codexProxy
@@ -291,11 +306,17 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
           401,
         );
       }
+      const body = executionBootstrapSchema.safeParse(await context.req.json());
+      if (!body.success)
+        return context.json({ error: 'invalid bootstrap payload' }, 400);
       if (
-        !(await executionService.bindExecutionToExternalRun(
+        !(await executionService.consumeExecutionBootstrapCapability(
           configuration.prisma,
           context.req.param('executionId'),
+          body.data.capability,
           BigInt(claims.run_id),
+          claims.run_attempt,
+          configuration.now?.(),
         ))
       ) {
         return context.json({ error: 'execution is unavailable' }, 404);
@@ -337,6 +358,7 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
           configuration.prisma,
           executionId,
           BigInt(claims.run_id),
+          claims.run_attempt,
         ))
       )
         return context.json({ error: 'execution is unavailable' }, 404);
@@ -458,6 +480,7 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
           configuration.prisma,
           context.req.param('executionId'),
           BigInt(claims.run_id),
+          claims.run_attempt,
         ))
       )
         return context.json({ error: 'execution is unavailable' }, 404);

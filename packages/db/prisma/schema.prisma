@@ -183,6 +183,10 @@ model Execution {
   attemptId       String                    @unique
   status          ExecutionStatus           @default(RUNNING)
   externalRunId   BigInt?                   @unique
+  externalRunAttempt Int?
+  bootstrapCapabilityHash String?
+  bootstrapExpiresAt DateTime?
+  bootstrapUsedAt  DateTime?
   externalUrl     String?
   reason          String?
   failureCategory ExecutionFailureCategory?
@@ -203,6 +207,7 @@ model Execution {
   cancellationRequest ExecutionCancellationRequest?
 
   @@index([status, startedAt])
+  @@index([bootstrapExpiresAt])
 }
 
 model ExecutionCancellationRequest {

@@ -9,6 +9,10 @@ on:
         description: DeepAuto execution identifier
         required: true
         type: string
+      bootstrap_capability:
+        description: One-time DeepAuto execution bootstrap capability
+        required: true
+        type: string
 
 permissions: {}
 
@@ -27,6 +31,7 @@ jobs:
     env:
       DEEPAUTO_GATEWAY_URL: ${{ vars.DEEPAUTO_GATEWAY_URL }}
       EXECUTION_ID: ${{ inputs.execution_id }}
+      DEEPAUTO_BOOTSTRAP_CAPABILITY: ${{ inputs.bootstrap_capability }}
       DEEPAUTO_STATE_NAME: deepauto-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out sandbox repository without persisted credentials
@@ -39,6 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${DEEPAUTO_GATEWAY_URL:-}"
+          test -n "${DEEPAUTO_BOOTSTRAP_CAPABILITY:-}"
           [[ "$DEEPAUTO_GATEWAY_URL" == https://* ]]
           DEEPAUTO_STATE_DIR="$RUNNER_TEMP/$DEEPAUTO_STATE_NAME"
           mkdir -p "$DEEPAUTO_STATE_DIR"
@@ -56,9 +62,16 @@ jobs:
           gateway_base="${DEEPAUTO_GATEWAY_URL%/}"
           bootstrap_file="$DEEPAUTO_STATE_DIR/bootstrap.json"
           session_file="$DEEPAUTO_STATE_DIR/session.json"
+          bootstrap_body="$(node -e '
+            const value = process.argv[1];
+            if (typeof value !== "string" || value.length < 43) process.exit(1);
+            process.stdout.write(JSON.stringify({ capability: value }));
+          ' "$DEEPAUTO_BOOTSTRAP_CAPABILITY")"
           curl --fail --silent --show-error --output "$bootstrap_file" \
             --header "Authorization: Bearer $oidc_token" \
+            --header "Content-Type: application/json" \
             --request POST \
+            --data "$bootstrap_body" \
             "$gateway_base/github/actions/executions/${EXECUTION_ID}/bootstrap"
           chmod 600 "$bootstrap_file"
 

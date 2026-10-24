@@ -20,6 +20,7 @@ const claims: JWTPayload = {
   ref: policy.ref,
   event_name: policy.eventName,
   run_id: '12345',
+  run_attempt: 1,
 };
 
 test('accepts only the configured GitHub Actions repository and workflow', () => {
@@ -29,6 +30,7 @@ test('accepts only the configured GitHub Actions repository and workflow', () =>
     ref: policy.ref,
     event_name: policy.eventName,
     run_id: '12345',
+    run_attempt: 1,
   });
   expect(() =>
     assertGitHubActionsOidcClaims(
@@ -51,5 +53,5 @@ test('passes the configured audience to the JWT verifier before trusting claims'
       expect(input).toEqual(policy);
       return claims;
     }),
-  ).resolves.toMatchObject({ run_id: '12345' });
+  ).resolves.toMatchObject({ run_id: '12345', run_attempt: 1 });
 });
