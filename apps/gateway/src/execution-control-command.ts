@@ -9,19 +9,25 @@ export function parseGitHubExecutionControlCommand(
   instruction: string,
 ): GitHubExecutionControlCommand | null {
   const normalized = instruction.trim().toLowerCase().replaceAll(/\s+/g, ' ');
-  if (normalized === 'status') return { command: 'status', scope: 'self' };
-  if (normalized === 'cancel') return { command: 'cancel', scope: 'self' };
-  if (normalized === 'operator status') {
+  if (normalized === 'status' || normalized === '状态') {
+    return { command: 'status', scope: 'self' };
+  }
+  if (normalized === 'cancel' || normalized === '取消') {
+    return { command: 'cancel', scope: 'self' };
+  }
+  if (normalized === 'operator status' || normalized === '管理员 状态') {
     return { command: 'status', scope: 'workspace' };
   }
-  if (normalized === 'operator cancel') {
+  if (normalized === 'operator cancel' || normalized === '管理员 取消') {
     return { command: 'cancel', scope: 'workspace' };
   }
   return null;
 }
 
 export function hasGitHubExecutionControlPrefix(instruction: string): boolean {
-  return /^(?:status|cancel|operator)\b/i.test(instruction.trim());
+  return /^(?:status|cancel|operator|状态|取消|管理员)\b/i.test(
+    instruction.trim(),
+  );
 }
 
 export function executionControlReceipt(

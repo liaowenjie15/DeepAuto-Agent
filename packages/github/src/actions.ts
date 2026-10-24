@@ -14,6 +14,15 @@ const appCredentialsSchema = z.object({
   privateKey: z.string().trim().min(1),
 });
 
+const installationPermissionsSchema = z
+  .object({
+    actions: z.enum(['read', 'write']),
+    contents: z.enum(['read', 'write']),
+    issues: z.enum(['read', 'write']),
+    pull_requests: z.enum(['read', 'write']),
+  })
+  .partial();
+
 const installationTokenResponseSchema = z.object({
   token: z.string().trim().min(1),
   expires_at: z.iso.datetime(),
@@ -50,6 +59,9 @@ const workflowRunsResponseSchema = z.object({
 });
 
 export type GitHubAppCredentials = z.infer<typeof appCredentialsSchema>;
+export type GitHubAppInstallationPermissions = z.input<
+  typeof installationPermissionsSchema
+>;
 export type GitHubWorkflowDispatch = z.input<typeof workflowDispatchSchema>;
 export type GitHubWorkflowRunLookup = z.input<typeof workflowRunLookupSchema>;
 export type GitHubWorkflowRunCancellation = z.input<
@@ -139,9 +151,15 @@ export async function createGitHubInstallationAccessToken(
   credentials: GitHubAppCredentials,
   repository: string,
   options: GitHubAppClientOptions = {},
+  permissions: GitHubAppInstallationPermissions = {
+    actions: 'write',
+    contents: 'write',
+    pull_requests: 'write',
+  },
 ): Promise<GitHubInstallationAccessToken> {
   const parsedCredentials = appCredentialsSchema.parse(credentials);
   const parsedRepository = repositorySchema.parse(repository);
+  const parsedPermissions = installationPermissionsSchema.parse(permissions);
   const request = options.fetch ?? fetch;
   const jwt = await createGitHubAppJwt(parsedCredentials, options);
   const response = await request(
@@ -156,11 +174,7 @@ export async function createGitHubInstallationAccessToken(
       },
       body: JSON.stringify({
         repositories: [parsedRepository.split('/')[1]],
-        permissions: {
-          actions: 'write',
-          contents: 'write',
-          pull_requests: 'write',
-        },
+        permissions: parsedPermissions,
       }),
     },
   );

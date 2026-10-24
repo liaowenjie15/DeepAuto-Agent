@@ -1,5 +1,6 @@
 import type { InboundInvocation } from '@deepauto/contracts';
 import {
+  type AuthorizedInvocation,
   authorizeInboundInvocation,
   controlConversationExecution,
   createOrGetInvocationJob,
@@ -21,6 +22,15 @@ export type PilotAdmissionProvider =
   | PilotAdmissionConfiguration
   | (() => PilotAdmissionConfiguration);
 
+export type InboundInvocationAdmissionResult =
+  | { accepted: true }
+  | { accepted: false; reason: string; isFork?: boolean };
+
+export type InboundInvocationAdmission = (
+  invocation: InboundInvocation,
+  authorized: AuthorizedInvocation,
+) => Promise<InboundInvocationAdmissionResult>;
+
 export type ExecutionControlDispatchResult =
   | { status: 'ignored' }
   | { status: 'unauthorized' }
@@ -36,6 +46,7 @@ export async function dispatchInboundInvocation(
   prisma: PrismaClient,
   invocation: InboundInvocation | null,
   pilotAdmission?: PilotAdmissionProvider,
+  admission?: InboundInvocationAdmission,
 ): Promise<DispatchResult> {
   if (!invocation) return { status: 'ignored' };
 
@@ -68,6 +79,31 @@ export async function dispatchInboundInvocation(
       return decision.reason === 'paused'
         ? { status: 'paused' }
         : { status: 'unauthorized' };
+    }
+  }
+
+  if (admission) {
+    const decision = await admission(invocation, authorized);
+    if (!decision.accepted) {
+      const commentId = invocation.idempotencyKey.startsWith('github:comment:')
+        ? invocation.idempotencyKey.slice('github:comment:'.length)
+        : null;
+      await prisma.auditEvent.create({
+        data: {
+          workspaceId: authorized.workspaceId,
+          actorId: authorized.actorId,
+          action: 'github.invocation_rejected',
+          metadata: {
+            reason: decision.reason,
+            deliveryId: invocation.sourceEventId,
+            commentId,
+            repositoryId: invocation.repositoryId ?? null,
+            anchor: invocation.anchor,
+            isFork: decision.isFork ?? null,
+          },
+        },
+      });
+      return { status: 'unauthorized' };
     }
   }
 

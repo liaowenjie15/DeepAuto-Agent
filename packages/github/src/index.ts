@@ -15,6 +15,7 @@ export {
   findGitHubWorkflowRun,
   type GitHubAppClientOptions,
   type GitHubAppCredentials,
+  type GitHubAppInstallationPermissions,
   type GitHubFetch,
   type GitHubInstallationAccessToken,
   GitHubRequestError,
@@ -35,10 +36,23 @@ export {
   verifyGitHubActionsOidcToken,
 } from './actions-oidc';
 export {
+  createGitHubAppIssueCommentPublisher,
+  createGitHubIssueComment,
+  type GitHubIssueComment,
+  type GitHubIssueCommentPublisher,
+} from './comments';
+export {
   type ExecutionProxyTokenClaims,
   issueExecutionProxyToken,
   verifyExecutionProxyToken,
 } from './execution-proxy-token';
+export {
+  createGitHubAppPullRequestInspector,
+  type GitHubPullRequest,
+  type GitHubPullRequestInspector,
+  type GitHubPullRequestLookup,
+  getGitHubPullRequest,
+} from './pull-requests';
 
 const issueCommentSchema = z.object({
   action: z.literal('created'),
@@ -56,6 +70,16 @@ const issueCommentSchema = z.object({
     user: z.object({ id: z.union([z.string(), z.number()]) }),
   }),
 });
+
+export const deepAutoReceiptMarker = '<!-- deepauto-receipt -->';
+
+export function isGitHubIssueCommentFromActor(
+  payload: unknown,
+  actorId: string,
+): boolean {
+  const parsed = issueCommentSchema.safeParse(payload);
+  return parsed.success && String(parsed.data.comment.user.id) === actorId;
+}
 
 export function verifyGitHubWebhookSignature(
   rawBody: string,
@@ -87,6 +111,7 @@ export function normalizeGitHubIssueComment(
 ): InboundInvocation | null {
   const parsed = issueCommentSchema.safeParse(payload);
   if (!parsed.success) return null;
+  if (parsed.data.comment.body.includes(deepAutoReceiptMarker)) return null;
 
   const mention = input.botMention.trim();
   const instruction = parsed.data.comment.body.replace(mention, '').trim();
