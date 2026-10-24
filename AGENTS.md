@@ -15,3 +15,7 @@ This is the authoritative global instruction layer for DeepAuto code tasks. Appl
 ## Layering
 
 `/.deepauto/prompt-layers.json` records the versioned rule sources. Read only the nearest applicable nested `AGENTS.md` for the path or capability being changed; do not load unrelated capability rules.
+
+## Review Before PR
+
+Before preparing a PR, run `bun run review:plan -- <base-ref>` and follow `.codex/review-protocol.md`. Every diff requires `code-reviewer`; high-risk paths additionally require `execution-safety-reviewer`.
