@@ -48,6 +48,7 @@ const artifactNames = {
   test_result: ExecutionArtifactName.TEST_RESULT,
   commit_sha: ExecutionArtifactName.COMMIT_SHA,
   pull_request: ExecutionArtifactName.PULL_REQUEST,
+  prompt_layers: ExecutionArtifactName.PROMPT_LAYERS,
   workspace: ExecutionArtifactName.WORKSPACE,
 } as const;
 

@@ -79,6 +79,7 @@ enum ExecutionArtifactName {
   TEST_RESULT
   COMMIT_SHA
   PULL_REQUEST
+  PROMPT_LAYERS
   WORKSPACE
 }
 

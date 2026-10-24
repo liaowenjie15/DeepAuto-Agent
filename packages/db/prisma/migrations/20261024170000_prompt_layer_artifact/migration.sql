@@ -1,0 +1,1 @@
+ALTER TYPE "ExecutionArtifactName" ADD VALUE 'PROMPT_LAYERS';

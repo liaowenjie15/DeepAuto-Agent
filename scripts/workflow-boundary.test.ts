@@ -62,7 +62,9 @@ it('requires an execution-bound workflow run name', () => {
 
 it('requires the versioned prompt layer artifact', () => {
   const workflow = readFileSync(executionWorkflowPath, 'utf8');
-  const root = fixture(workflow.replace("'prompt_layers\\t%s'", "'layers\\t%s'"));
+  const root = fixture(
+    workflow.replace("'prompt_layers\\t%s'", "'layers\\t%s'"),
+  );
 
   expect(inspectWorkflowBoundary(root)).toContain(
     '.github/workflows/deepauto-execute.yml: must record the prompt_layers artifact',
