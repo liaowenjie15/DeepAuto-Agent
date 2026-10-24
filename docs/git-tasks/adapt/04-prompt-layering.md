@@ -1,5 +1,11 @@
 # B4：改造 Agent Prompt 的分层与按需加载
 
+## 实施状态
+
+**进行中。** `feat/prompt-layering` 已以 `origin/main` 为基线创建独立工作树。实现采用仓库根 `AGENTS.md` 作为唯一全局规则层，并以 `.github/`、Gateway、Worker、DB、GitHub、Runner Manager 与飞书目录的嵌套 `AGENTS.md` 提供按路径/能力加载的细则；规则清单与版本集中在 `.deepauto/prompt-layers.json`。全局层把授权/审计/最小副作用/敏感信息/PR-only 作为硬边界，能力层只描述本模块的真源和安全约束，不复制 Grain 的频道、内容生产或组织约定。
+
+受管执行 workflow 会把清单安全复制到 Runner 状态目录，并在 callback 前发送 `prompt_layers` artifact，因此每次 Execution 都能保留当时可用规则来源和版本；该 artifact 已加入共享事件契约，并由 workflow-boundary 检查约束。运行时 Prompt 仅说明使用全局层及与修改路径匹配的单一细则，不内联全部规则。当前实现和新增契约用例尚未运行测试、lint、typecheck、build 或 Hosted Runner 验证。
+
 ## 目的
 
 采用“核心规则 + 能力/路径级细则”的 Prompt 组织方式，让每次执行获得最小但充分的安全上下文。
