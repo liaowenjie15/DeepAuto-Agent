@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "global": {
+    "path": "AGENTS.md",
+    "version": "1"
+  },
+  "layers": [
+    { "path": ".github/AGENTS.md", "version": "1", "scope": "workflow" },
+    { "path": "apps/gateway/AGENTS.md", "version": "1", "scope": "gateway" },
+    { "path": "apps/worker/AGENTS.md", "version": "1", "scope": "worker" },
+    { "path": "packages/db/AGENTS.md", "version": "1", "scope": "database" },
+    { "path": "packages/github/AGENTS.md", "version": "1", "scope": "github" },
+    { "path": "packages/runner-manager/AGENTS.md", "version": "1", "scope": "runner-manager" },
+    { "path": "packages/lark/AGENTS.md", "version": "1", "scope": "lark" }
+  ]
+}

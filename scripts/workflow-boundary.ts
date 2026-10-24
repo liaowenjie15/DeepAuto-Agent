@@ -42,6 +42,12 @@ function hasExecutionBoundRunName(workflow: string): boolean {
   );
 }
 
+function hasPromptLayerArtifact(workflow: string): boolean {
+  return /append_event\s+"\$attempt_id"\s+artifact\s+"\$\(printf\s+'prompt_layers\\t%s'/.test(
+    workflow,
+  );
+}
+
 export function inspectWorkflowBoundary(root: string): string[] {
   const workflowPath = join(root, EXECUTION_WORKFLOW_PATH);
   if (!existsSync(workflowPath)) {
@@ -59,6 +65,17 @@ export function inspectWorkflowBoundary(root: string): string[] {
   if (!hasExecutionBoundRunName(workflow)) {
     errors.push(
       `${EXECUTION_WORKFLOW_PATH}: must name runs from the workflow_dispatch execution_id input`,
+    );
+  }
+  if (!existsSync(join(root, 'AGENTS.md'))) {
+    errors.push('AGENTS.md: missing global DeepAuto prompt layer');
+  }
+  if (!existsSync(join(root, '.deepauto', 'prompt-layers.json'))) {
+    errors.push('.deepauto/prompt-layers.json: missing prompt layer manifest');
+  }
+  if (!hasPromptLayerArtifact(workflow)) {
+    errors.push(
+      `${EXECUTION_WORKFLOW_PATH}: must record the prompt_layers artifact`,
     );
   }
   if (!/EXECUTION_ID:\s*\$\{\{\s*inputs\.execution_id\s*}}/.test(workflow)) {

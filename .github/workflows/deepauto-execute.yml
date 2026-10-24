@@ -128,11 +128,18 @@ jobs:
 
           branch_suffix="$(printf '%s' "$EXECUTION_ID" | sha256sum | cut -c1-16)"
           git switch --create "deepauto/execution-$branch_suffix"
+          prompt_layers_file="$DEEPAUTO_STATE_DIR/prompt-layers.json"
+          cp "$GITHUB_WORKSPACE/.deepauto/prompt-layers.json" "$prompt_layers_file"
+          chmod 600 "$prompt_layers_file"
           prompt_file="$DEEPAUTO_STATE_DIR/prompt"
           cat > "$prompt_file" <<'PROMPT'
           Complete the requested code task in the current repository. Work only on the current branch.
           Run the relevant project checks when practical. Do not commit, push, create a pull request,
           read credentials, or change Git remotes; the workflow performs delivery after Codex exits.
+
+          This repository uses a versioned `AGENTS.md` hierarchy. Apply the global layer and only the
+          path- or capability-specific layer relevant to the files being changed. The exact rule-source
+          manifest for this execution is recorded as the `prompt_layers` artifact.
 
           Task:
           PROMPT
@@ -184,6 +191,9 @@ jobs:
           if [[ -f "$attempt_file" && -f "$DEEPAUTO_STATE_DIR/codex-exit" ]]; then
             attempt_id="$(cat "$attempt_file")"
             codex_exit="$(cat "$DEEPAUTO_STATE_DIR/codex-exit")"
+            if [[ -f "$DEEPAUTO_STATE_DIR/prompt-layers.json" ]]; then
+              append_event "$attempt_id" artifact "$(printf 'prompt_layers\t%s' "$(cat "$DEEPAUTO_STATE_DIR/prompt-layers.json")")"
+            fi
             if [[ "$codex_exit" -ne 0 ]]; then
               callback_reason="Codex CLI failed before completing the execution"
               append_event "$attempt_id" failed "$callback_reason"

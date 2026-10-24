@@ -65,6 +65,14 @@ it('accepts only structured execution events with task-bound IDs', () => {
     }).success,
   ).toBe(true);
   expect(
+    executionEventSchema.safeParse({
+      type: 'artifact',
+      attemptId: 'attempt-1',
+      name: 'prompt_layers',
+      value: '{"schemaVersion":1}',
+    }).success,
+  ).toBe(true);
+  expect(
     executionEventSchema.safeParse({ type: 'completed', attemptId: ' ' })
       .success,
   ).toBe(false);
