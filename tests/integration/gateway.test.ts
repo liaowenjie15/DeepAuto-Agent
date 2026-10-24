@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import { deepAutoReceiptMarker } from '../../packages/github/src';
 import { createGatewayApp } from '../../apps/gateway/src/app';
 import type { PilotAdmissionConfiguration } from '../../apps/gateway/src/pilot-admission';
 import {
@@ -289,8 +290,8 @@ test('reports and cancels only the caller-owned queued conversation Job', async 
     receipt: 'The queued DeepAuto task was cancelled.',
   });
   expect(receipts).toEqual([
-    'The DeepAuto task is queued.',
-    'The queued DeepAuto task was cancelled.',
+    `The DeepAuto task is queued.\n\n${deepAutoReceiptMarker}`,
+    `The queued DeepAuto task was cancelled.\n\n${deepAutoReceiptMarker}`,
   ]);
   expect(
     await prisma.job.findUniqueOrThrow({

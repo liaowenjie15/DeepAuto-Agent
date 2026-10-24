@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import {
+  deepAutoReceiptMarker,
   getGitHubIssueCommentReceiptTarget,
   normalizeGitHubIssueComment,
   verifyGitHubWebhookSignature,
@@ -41,6 +42,23 @@ test('normalizes explicit issue or pull-request commands only', () => {
   expect(
     normalizeGitHubIssueComment(
       { ...payload, comment: { ...payload.comment, body: 'ordinary comment' } },
+      {
+        workspaceId: 'workspace-1',
+        deliveryId: 'delivery-1',
+        receivedAt: '2026-10-20T00:00:00.000Z',
+        botMention: '@deepauto',
+      },
+    ),
+  ).toBeNull();
+  expect(
+    normalizeGitHubIssueComment(
+      {
+        ...payload,
+        comment: {
+          ...payload.comment,
+          body: `@deepauto fix the failing test\n${deepAutoReceiptMarker}`,
+        },
+      },
       {
         workspaceId: 'workspace-1',
         deliveryId: 'delivery-1',

@@ -47,6 +47,44 @@ test('ignores non-issue-comment events after a valid signature', async () => {
   expect(await response.json()).toEqual({ status: 'ignored' });
 });
 
+test('ignores signed comments authored by the configured GitHub bot', async () => {
+  const payload = {
+    action: 'created',
+    repository: { id: 42 },
+    issue: { number: 7 },
+    comment: {
+      id: 99,
+      body: '@deepauto fix the failing test',
+      user: { id: 1234 },
+    },
+  };
+  const body = JSON.stringify(payload);
+  const botSignature = `sha256=${createHmac('sha256', 'secret')
+    .update(body)
+    .digest('hex')}`;
+  const app = createGatewayApp({
+    prisma: {} as never,
+    githubWebhookSecret: 'secret',
+    githubWorkspaceId: 'workspace-1',
+    githubBotMention: '@deepauto',
+    githubBotUserId: '1234',
+  });
+
+  const response = await app.request('/github/webhooks', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-github-delivery': 'delivery-1',
+      'x-github-event': 'issue_comment',
+      'x-hub-signature-256': botSignature,
+    },
+    body,
+  });
+
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ status: 'ignored' });
+});
+
 test('returns execution context only after a trusted GitHub Actions OIDC check', async () => {
   const app = createGatewayApp({
     prisma: {} as never,

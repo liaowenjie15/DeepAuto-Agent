@@ -7,9 +7,11 @@ import {
   type PrismaClient,
 } from '@deepauto/db';
 import {
+  deepAutoReceiptMarker,
   type GitHubActionsOidcTokenVerifier,
   type GitHubActionsOidcTrustPolicy,
   getGitHubIssueCommentReceiptTarget,
+  isGitHubIssueCommentFromActor,
   issueExecutionProxyToken,
   normalizeGitHubIssueComment,
   verifyExecutionProxyToken,
@@ -97,6 +99,7 @@ export type GatewayConfiguration = {
   githubWebhookSecret: string;
   githubWorkspaceId: string;
   githubBotMention: string;
+  githubBotUserId?: string;
   githubActions?: GitHubActionsGatewayConfiguration;
   githubCommentReceiptPublisher?: GitHubCommentReceiptPublisher;
   codexProxy?: CodexProxyConfiguration;
@@ -175,6 +178,12 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
 
     const deliveryId = context.req.header('x-github-delivery');
     if (!deliveryId) return context.json({ error: 'missing delivery ID' }, 400);
+    if (
+      configuration.githubBotUserId &&
+      isGitHubIssueCommentFromActor(payload, configuration.githubBotUserId)
+    ) {
+      return context.json({ status: 'ignored' }, 202);
+    }
 
     const invocation = normalizeGitHubIssueComment(payload, {
       workspaceId: configuration.githubWorkspaceId,
@@ -210,7 +219,7 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
       if (target && configuration.githubCommentReceiptPublisher) {
         await configuration.githubCommentReceiptPublisher.publish({
           ...target,
-          body: receipt,
+          body: `${receipt}\n\n${deepAutoReceiptMarker}`,
         });
       }
       return context.json({ status: 'controlled', receipt }, 202);

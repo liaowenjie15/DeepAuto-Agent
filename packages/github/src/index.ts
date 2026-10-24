@@ -57,6 +57,16 @@ const issueCommentSchema = z.object({
   }),
 });
 
+export const deepAutoReceiptMarker = '<!-- deepauto-receipt -->';
+
+export function isGitHubIssueCommentFromActor(
+  payload: unknown,
+  actorId: string,
+): boolean {
+  const parsed = issueCommentSchema.safeParse(payload);
+  return parsed.success && String(parsed.data.comment.user.id) === actorId;
+}
+
 export function verifyGitHubWebhookSignature(
   rawBody: string,
   signature: string | null,
@@ -87,6 +97,7 @@ export function normalizeGitHubIssueComment(
 ): InboundInvocation | null {
   const parsed = issueCommentSchema.safeParse(payload);
   if (!parsed.success) return null;
+  if (parsed.data.comment.body.includes(deepAutoReceiptMarker)) return null;
 
   const mention = input.botMention.trim();
   const instruction = parsed.data.comment.body.replace(mention, '').trim();
