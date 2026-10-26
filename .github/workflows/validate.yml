@@ -92,6 +92,9 @@ jobs:
       - name: Verify validation targets
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run verify:targets
+      - name: Verify capability registry
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run verify:capabilities
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run lint

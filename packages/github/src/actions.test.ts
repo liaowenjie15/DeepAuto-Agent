@@ -2,12 +2,30 @@ import { expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import {
   cancelGitHubWorkflowRun,
+  createGitHubAppJwt,
   createGitHubInstallationAccessToken,
   dispatchGitHubWorkflow,
   type GitHubFetch,
   getGitHubWorkflowRun,
   isRetryableGitHubRequestError,
 } from './actions';
+
+test('creates a GitHub App JWT from a PKCS#1 private key', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 });
+
+  await expect(
+    createGitHubAppJwt(
+      {
+        appId: '5398938',
+        installationId: '173461210',
+        privateKey: privateKey
+          .export({ format: 'pem', type: 'pkcs1' })
+          .toString(),
+      },
+      { now: () => new Date('2026-10-21T00:00:00.000Z') },
+    ),
+  ).resolves.toMatch(/^[^.]+\.[^.]+\.[^.]+$/);
+});
 
 test('limits an installation token request to the sandbox repository', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 });

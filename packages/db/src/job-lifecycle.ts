@@ -29,6 +29,12 @@ export type JobCancellationRequestResult = {
   executionId?: string;
 };
 
+export type RejectQueuedJobForPolicyInput = {
+  jobId: string;
+  reason: string;
+  now?: Date;
+};
+
 const jobStatusForAttemptStatus = {
   [AttemptStatus.COMPLETED]: JobStatus.COMPLETED,
   [AttemptStatus.FAILED]: JobStatus.FAILED,
@@ -81,6 +87,48 @@ export async function beginJobAttempt(
         number: job.currentAttemptNumber,
       },
     });
+  });
+}
+
+export async function rejectQueuedJobForPolicy(
+  prisma: PrismaClient,
+  input: RejectQueuedJobForPolicyInput,
+): Promise<boolean> {
+  const now = input.now ?? new Date();
+  return prisma.$transaction(async (transaction) => {
+    const job = await transaction.job.findFirst({
+      where: {
+        id: input.jobId,
+        status: JobStatus.QUEUED,
+        cancelledAt: null,
+      },
+      select: {
+        id: true,
+        invocation: { select: { workspaceId: true, actorId: true } },
+      },
+    });
+    if (!job) return false;
+
+    const rejected = await transaction.job.updateMany({
+      where: {
+        id: job.id,
+        status: JobStatus.QUEUED,
+        cancelledAt: null,
+      },
+      data: { status: JobStatus.FAILED, updatedAt: now },
+    });
+    if (rejected.count !== 1) return false;
+
+    await transaction.auditEvent.create({
+      data: {
+        workspaceId: job.invocation.workspaceId,
+        actorId: job.invocation.actorId,
+        jobId: job.id,
+        action: 'job_rejected_by_execution_policy',
+        metadata: { reason: input.reason },
+      },
+    });
+    return true;
   });
 }
 

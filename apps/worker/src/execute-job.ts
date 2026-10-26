@@ -1,3 +1,4 @@
+import { executionCapabilitySnapshotSchema } from '@deepauto/contracts';
 import {
   acceptExecutionCallback,
   beginJobAttempt,
@@ -5,7 +6,9 @@ import {
   type ExecutionStatus,
   isJobAtConversationHead,
   type PrismaClient,
+  rejectQueuedJobForPolicy,
   releaseConversationClaim,
+  renewConversationClaim,
   startExecution,
   transferConversationClaim,
   tryClaimConversation,
@@ -22,8 +25,10 @@ import type IORedis from 'ioredis';
 
 const defaultCallbackTtlMilliseconds = 15 * 60 * 1000;
 const maximumCallbackTtlMilliseconds = 60 * 60 * 1000;
-const bootstrapCapabilityTtlMilliseconds = 60_000;
+const bootstrapCapabilityTtlMilliseconds = 5 * 60 * 1000;
 const callbackDeliverySlackMilliseconds = 2 * 60 * 1000;
+export const remoteExecutionLeaseMilliseconds =
+  maximumCallbackTtlMilliseconds + callbackDeliverySlackMilliseconds;
 
 const executionStatusByHarnessStatus = {
   completed: 'COMPLETED',
@@ -75,7 +80,10 @@ export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
   ExecuteQueuedJobDependencies,
   'runHarness'
 > & {
-  githubActionsExecutor: Pick<GitHubActionsExecutor, 'start' | 'getStatus'>;
+  githubActionsExecutor: Pick<
+    GitHubActionsExecutor,
+    'start' | 'getStatus' | 'isConfiguredForRepository'
+  >;
 };
 
 export function toExecutionStatus(
@@ -115,6 +123,15 @@ async function failExecutionBeforeDispatch(
     events: [],
     now,
   });
+}
+
+async function rejectQueuedGitHubActionsJob(
+  jobId: string,
+  reason: string,
+  dependencies: Pick<ExecuteQueuedGitHubActionsJobDependencies, 'prisma'>,
+): Promise<QueuedJobExecutionResult> {
+  await rejectQueuedJobForPolicy(dependencies.prisma, { jobId, reason });
+  return { status: 'rejected' };
 }
 
 export async function executeQueuedJob(
@@ -223,7 +240,18 @@ export async function executeQueuedGitHubActionsJob(
   assertCallbackTtl(callbackTtlMilliseconds);
   const job = await dependencies.prisma.job.findUnique({
     where: { id: input.jobId },
-    select: { conversationKey: true },
+    select: {
+      conversationKey: true,
+      capabilityId: true,
+      capabilityPolicyHash: true,
+      capabilityPolicy: true,
+      invocation: {
+        select: {
+          repositoryId: true,
+          workspaceId: true,
+        },
+      },
+    },
   });
   if (!job) return { status: 'skipped' };
 
@@ -248,15 +276,58 @@ export async function executeQueuedGitHubActionsJob(
       return { status: 'deferred' };
     }
 
+    const repositoryId = job.invocation.repositoryId;
+    if (
+      !repositoryId ||
+      !dependencies.githubActionsExecutor.isConfiguredForRepository(
+        repositoryId,
+      )
+    ) {
+      return rejectQueuedGitHubActionsJob(
+        input.jobId,
+        'The invocation repository is not configured for GitHub Actions execution.',
+        dependencies,
+      );
+    }
+
+    const workspaceRepository =
+      await dependencies.prisma.workspaceRepository.findFirst({
+        where: {
+          workspaceId: job.invocation.workspaceId,
+          providerRepositoryId: repositoryId,
+          enabled: true,
+        },
+        select: { id: true },
+      });
+    if (!workspaceRepository) {
+      return rejectQueuedGitHubActionsJob(
+        input.jobId,
+        'The invocation repository is not authorized for execution.',
+        dependencies,
+      );
+    }
+
+    const parsedCapabilitySnapshot =
+      executionCapabilitySnapshotSchema.safeParse({
+        id: job.capabilityId,
+        policyHash: job.capabilityPolicyHash,
+        policy: job.capabilityPolicy,
+      });
+    if (!parsedCapabilitySnapshot.success) {
+      return rejectQueuedGitHubActionsJob(
+        input.jobId,
+        'The execution capability policy snapshot is invalid.',
+        dependencies,
+      );
+    }
+
     const attempt = await beginJobAttempt(dependencies.prisma, input.jobId);
     if (!attempt) return { status: 'skipped' };
 
     const now = dependencies.now ?? (() => new Date());
     const bootstrapCapability = createExecutionBootstrapCapability();
     const callbackExpiresAt = new Date(
-      now().getTime() +
-        callbackTtlMilliseconds +
-        callbackDeliverySlackMilliseconds,
+      now().getTime() + remoteExecutionLeaseMilliseconds,
     );
     const execution = await startExecution(
       dependencies.prisma,
@@ -267,6 +338,7 @@ export async function executeQueuedGitHubActionsJob(
         bootstrapExpiresAt: new Date(
           now().getTime() + bootstrapCapabilityTtlMilliseconds,
         ),
+        capabilitySnapshot: parsedCapabilitySnapshot.data,
       },
       now(),
     );
@@ -275,7 +347,7 @@ export async function executeQueuedGitHubActionsJob(
       job.conversationKey,
       input.workerId,
       execution.id,
-      callbackTtlMilliseconds + callbackDeliverySlackMilliseconds,
+      remoteExecutionLeaseMilliseconds,
     );
     if (!lockTransferred) {
       const callback = await failExecutionBeforeDispatch(
@@ -368,5 +440,18 @@ export async function releaseGitHubActionsExecutionConversation(
     dependencies.redis,
     execution.attempt.job.conversationKey,
     executionId,
+  );
+}
+
+export async function renewGitHubActionsExecutionConversation(
+  conversationKey: string,
+  executionId: string,
+  dependencies: Pick<ExecuteQueuedGitHubActionsJobDependencies, 'redis'>,
+): Promise<boolean> {
+  return renewConversationClaim(
+    dependencies.redis,
+    conversationKey,
+    executionId,
+    remoteExecutionLeaseMilliseconds,
   );
 }

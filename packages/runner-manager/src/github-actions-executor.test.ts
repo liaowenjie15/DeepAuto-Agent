@@ -41,6 +41,7 @@ test('dispatches the fixed sandbox workflow with a one-time bootstrap capability
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -73,12 +74,28 @@ test('dispatches the fixed sandbox workflow with a one-time bootstrap capability
   ]);
 });
 
+test('matches only its configured provider repository ID', () => {
+  const executor = new GitHubActionsExecutor(
+    {
+      repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
+      workflow: 'deepauto-execute.yml',
+      workflowRef: 'main',
+    },
+    controller(),
+  );
+
+  expect(executor.isConfiguredForRepository('1001')).toBe(true);
+  expect(executor.isConfiguredForRepository('1002')).toBe(false);
+});
+
 test('rejects an invalid configured repository before dispatching', () => {
   expect(
     () =>
       new GitHubActionsExecutor(
         {
           repository: 'invalid repository',
+          repositoryId: '1001',
           workflow: 'deepauto-execute.yml',
           workflowRef: 'main',
         },
@@ -87,10 +104,26 @@ test('rejects an invalid configured repository before dispatching', () => {
   ).toThrow('Repository must be owner/repository');
 });
 
+test('rejects a workflow that is not registered for execution', () => {
+  expect(
+    () =>
+      new GitHubActionsExecutor(
+        {
+          repository: 'liaowenjie15/deepauto-harness-sandbox',
+          repositoryId: '1001',
+          workflow: 'unregistered.yml',
+          workflowRef: 'main',
+        },
+        controller(),
+      ),
+  ).toThrow('GitHub Actions workflow is not registered');
+});
+
 test('preserves whether a failed GitHub dispatch is retryable', async () => {
   const retryableExecutor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -103,6 +136,7 @@ test('preserves whether a failed GitHub dispatch is retryable', async () => {
   const terminalExecutor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -129,6 +163,7 @@ test('maps a persisted GitHub Actions run to executor status', async () => {
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -155,6 +190,7 @@ test('cancels only the persisted run for an active execution', async () => {
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -185,6 +221,7 @@ test('does not cancel a completed GitHub Actions run', async () => {
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },
@@ -219,6 +256,7 @@ test('uses a persisted Run ID without scanning workflow runs again', async () =>
   const executor = new GitHubActionsExecutor(
     {
       repository: 'liaowenjie15/deepauto-harness-sandbox',
+      repositoryId: '1001',
       workflow: 'deepauto-execute.yml',
       workflowRef: 'main',
     },

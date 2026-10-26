@@ -9,6 +9,7 @@ const githubActionsJwks = createRemoteJWKSet(
 const trustPolicySchema = z.object({
   audience: z.string().trim().min(1),
   repository: z.string().trim().min(1),
+  repositoryId: z.string().trim().min(1),
   workflowRef: z.string().trim().min(1),
   ref: z.string().trim().min(1),
   eventName: z.string().trim().min(1),
@@ -16,6 +17,10 @@ const trustPolicySchema = z.object({
 
 const claimsSchema = z.object({
   repository: z.string().trim().min(1),
+  repository_id: z.union([
+    z.string().trim().min(1),
+    z.number().int().positive(),
+  ]),
   workflow_ref: z.string().trim().min(1),
   ref: z.string().trim().min(1),
   event_name: z.string().trim().min(1),
@@ -52,6 +57,9 @@ export function assertGitHubActionsOidcClaims(
 
   if (claims.repository !== parsedPolicy.repository) {
     throw new Error('GitHub Actions OIDC repository claim is not trusted');
+  }
+  if (String(claims.repository_id) !== parsedPolicy.repositoryId) {
+    throw new Error('GitHub Actions OIDC repository ID claim is not trusted');
   }
   if (claims.workflow_ref !== parsedPolicy.workflowRef) {
     throw new Error('GitHub Actions OIDC workflow claim is not trusted');

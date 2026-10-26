@@ -1,15 +1,18 @@
 import type { ExecutionResult } from '@deepauto/contracts';
 import {
   acceptExpiredExecutionCallback,
+  getActiveBoundExecutions,
   getExpiredBoundExecutionCallbacks,
+  requestJobCancellation,
 } from '@deepauto/db';
 import type { GitHubActionsExecutor } from '@deepauto/runner-manager';
 import {
   type ExecuteQueuedGitHubActionsJobDependencies,
-  releaseGitHubActionsExecutionConversation,
+  renewGitHubActionsExecutionConversation,
 } from './execute-job';
 
 const defaultIntervalMilliseconds = 1_000;
+const leaseRenewalIntervalMilliseconds = 30_000;
 
 export type GitHubActionsExecutionReconciler = {
   reconcileOnce(): Promise<number>;
@@ -24,10 +27,10 @@ export type GitHubActionsExecutionReconcilerDependencies = Pick<
   now?: () => Date;
 };
 
-function resultForState(
+export function resultForState(
   state: Awaited<ReturnType<GitHubActionsExecutor['getStatus']>>['state'],
   now: Date,
-): ExecutionResult {
+): ExecutionResult | null {
   if (state === 'completed') {
     return {
       status: 'COMPLETED',
@@ -57,14 +60,7 @@ function resultForState(
       finishedAt: now.toISOString(),
     };
   }
-  return {
-    status: 'TIMED_OUT',
-    failureCategory: 'TIMEOUT',
-    safeSummary: 'GitHub Actions did not report a terminal result in time.',
-    retryable: true,
-    artifacts: [],
-    finishedAt: now.toISOString(),
-  };
+  return null;
 }
 
 export function startGitHubActionsExecutionReconciler(
@@ -76,13 +72,39 @@ export function startGitHubActionsExecutionReconciler(
   }
   const now = dependencies.now ?? (() => new Date());
   let reconciling = false;
+  let lastLeaseRenewalAt = 0;
   const reconcileOnce = async () => {
     if (reconciling) return 0;
     reconciling = true;
     try {
+      const current = now();
+      if (
+        current.getTime() - lastLeaseRenewalAt >=
+        leaseRenewalIntervalMilliseconds
+      ) {
+        lastLeaseRenewalAt = current.getTime();
+        const activeExecutions = await getActiveBoundExecutions(
+          dependencies.prisma,
+        );
+        for (const execution of activeExecutions) {
+          try {
+            const renewed = await renewGitHubActionsExecutionConversation(
+              execution.conversationKey,
+              execution.executionId,
+              dependencies,
+            );
+            if (renewed) continue;
+          } catch {}
+          await requestJobCancellation(dependencies.prisma, {
+            jobId: execution.jobId,
+            requestedByActorId: execution.actorId,
+            now: current,
+          });
+        }
+      }
       const expired = await getExpiredBoundExecutionCallbacks(
         dependencies.prisma,
-        now(),
+        current,
       );
       let reconciled = 0;
       for (const execution of expired) {
@@ -99,17 +121,15 @@ export function startGitHubActionsExecutionReconciler(
         } catch {
           state = 'unknown';
         }
+        const result = resultForState(state, now());
+        if (!result) continue;
         const accepted = await acceptExpiredExecutionCallback(
           dependencies.prisma,
           execution,
-          resultForState(state, now()),
+          result,
           now(),
         );
         if (!accepted.accepted) continue;
-        await releaseGitHubActionsExecutionConversation(
-          execution.executionId,
-          dependencies,
-        );
         reconciled += 1;
       }
       return reconciled;

@@ -1,0 +1,14 @@
+/packages/contracts/src/capability-registry.ts @liaowenjie15
+/packages/contracts/src/index.ts @liaowenjie15
+/apps/gateway/src/dispatcher.ts @liaowenjie15
+/apps/worker/src/execute-job.ts @liaowenjie15
+/packages/runner-manager/src/github-actions-executor.ts @liaowenjie15
+/packages/db/src/execution-service.ts @liaowenjie15
+/packages/db/prisma/schema.prisma @liaowenjie15
+/packages/db/prisma/migrations/ @liaowenjie15
+/scripts/check-capability-registry.ts @liaowenjie15
+/scripts/workflow-boundary.ts @liaowenjie15
+/package.json @liaowenjie15
+/.github/workflows/deepauto-execute.yml @liaowenjie15
+/.github/workflows/validate.yml @liaowenjie15
+/.github/CODEOWNERS @liaowenjie15
