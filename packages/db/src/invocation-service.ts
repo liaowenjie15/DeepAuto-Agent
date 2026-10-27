@@ -1,4 +1,13 @@
-import type { Invocation, PrismaClient } from './generated/prisma/client';
+import {
+  createExecutionCapabilitySnapshot,
+  type ExecutionCapabilitySnapshot,
+  resolveExecutionCapability,
+} from '@deepauto/contracts';
+import type {
+  Invocation,
+  Prisma,
+  PrismaClient,
+} from './generated/prisma/client';
 
 export type CreateInvocationJobInput = {
   source: 'feishu' | 'github';
@@ -10,6 +19,8 @@ export type CreateInvocationJobInput = {
   sourceEventId: string;
   receivedAt: Date;
   idempotencyKey: string;
+  repositoryId?: string;
+  capabilitySnapshot?: ExecutionCapabilitySnapshot;
 };
 
 export type InvocationJob = {
@@ -48,6 +59,9 @@ export async function createOrGetInvocationJob(
   prisma: PrismaClient,
   input: CreateInvocationJobInput,
 ): Promise<InvocationJob> {
+  const capabilitySnapshot =
+    input.capabilitySnapshot ??
+    createExecutionCapabilitySnapshot(resolveExecutionCapability());
   try {
     const invocation = await prisma.$transaction(async (transaction) => {
       const created = await transaction.invocation.create({
@@ -58,12 +72,17 @@ export async function createOrGetInvocationJob(
           conversationKey: input.conversationKey,
           anchor: anchorMap[input.anchor],
           instruction: input.instruction,
+          repositoryId: input.repositoryId,
           sourceEventId: input.sourceEventId,
           receivedAt: input.receivedAt,
           job: {
             create: {
               conversationKey: input.conversationKey,
               idempotencyKey: input.idempotencyKey,
+              capabilityId: capabilitySnapshot.id,
+              capabilityPolicyHash: capabilitySnapshot.policyHash,
+              capabilityPolicy:
+                capabilitySnapshot.policy as Prisma.InputJsonValue,
             },
           },
         },

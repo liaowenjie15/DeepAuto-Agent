@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { importPKCS8, SignJWT } from 'jose';
 import { z } from 'zod';
 
@@ -100,6 +101,12 @@ export class GitHubRequestError extends Error {
   }
 }
 
+function toPkcs8PrivateKey(privateKey: string): string {
+  return createPrivateKey(privateKey)
+    .export({ format: 'pem', type: 'pkcs8' })
+    .toString();
+}
+
 export function isRetryableGitHubRequestError(error: unknown): boolean {
   return (
     error instanceof GitHubRequestError &&
@@ -125,7 +132,10 @@ export async function createGitHubAppJwt(
 ): Promise<string> {
   const parsed = appCredentialsSchema.parse(credentials);
   const now = Math.floor((options.now?.() ?? new Date()).getTime() / 1_000);
-  const privateKey = await importPKCS8(parsed.privateKey, 'RS256');
+  const privateKey = await importPKCS8(
+    toPkcs8PrivateKey(parsed.privateKey),
+    'RS256',
+  );
 
   return new SignJWT()
     .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
@@ -270,6 +280,7 @@ export function createGitHubAppWorkflowController(
         credentials,
         input.repository,
         options,
+        { actions: 'write' },
       );
       await dispatchGitHubWorkflow(accessToken.token, input, options);
     },
@@ -278,6 +289,7 @@ export function createGitHubAppWorkflowController(
         credentials,
         input.repository,
         options,
+        { actions: 'read' },
       );
       return getGitHubWorkflowRun(accessToken.token, input, options);
     },
@@ -286,6 +298,7 @@ export function createGitHubAppWorkflowController(
         credentials,
         input.repository,
         options,
+        { actions: 'write' },
       );
       await cancelGitHubWorkflowRun(accessToken.token, input, options);
     },

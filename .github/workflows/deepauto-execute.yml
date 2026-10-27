@@ -21,13 +21,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-executor-image:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - id: image
+        env:
+          IMAGE: ${{ vars.DEEPAUTO_EXECUTOR_IMAGE }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE" =~ ^ghcr\.io/liaowenjie15/deepauto-executor@sha256:[a-f0-9]{64}$ ]]
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
   execute:
+    needs: verify-executor-image
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       id-token: write
       contents: write
       pull-requests: write
+      packages: read
+    container:
+      image: ${{ needs.verify-executor-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     env:
       DEEPAUTO_GATEWAY_URL: ${{ vars.DEEPAUTO_GATEWAY_URL }}
       EXECUTION_ID: ${{ inputs.execution_id }}
@@ -122,7 +142,6 @@ jobs:
           append_event started
           append_event progress 'Codex CLI started in the isolated sandbox'
 
-          npm install --global @openai/codex@0.163.0 >/dev/null
           codex_home="$DEEPAUTO_STATE_DIR/codex-home"
           mkdir -p "$codex_home"
           chmod 700 "$codex_home"
@@ -161,7 +180,7 @@ jobs:
           set +e
           DEEPAUTO_CODEX_PROXY_TOKEN="$(cat "$DEEPAUTO_STATE_DIR/proxy-token")" \
             CODEX_HOME="$codex_home" \
-            codex exec --ignore-user-config --ephemeral --sandbox workspace-write \
+            codex exec --ephemeral --sandbox workspace-write \
               --json --cd "$GITHUB_WORKSPACE" - < "$prompt_file" \
               > "$DEEPAUTO_STATE_DIR/codex.jsonl"
           codex_exit=$?

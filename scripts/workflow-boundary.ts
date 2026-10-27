@@ -28,6 +28,11 @@ const FORBIDDEN_PATTERNS = [
     pattern:
       /\b(?:kubectl|helm|terraform)\s+(?:apply|upgrade)\b|\bvercel\b[^\n]*--prod\b|\b(?:bun|npm|pnpm|yarn)\s+run\s+(?:deploy|release)\b/i,
   },
+  {
+    message: 'must not bypass the Codex sandbox or add writable directories',
+    pattern:
+      /\bcodex\s+exec\b[^\n]*(?:--dangerously-bypass-(?:approvals-and-sandbox|hook-trust)|--approve-for-me|--add-dir\b)/i,
+  },
 ] as const;
 
 function hasRequiredExecutionInput(workflow: string): boolean {
@@ -45,6 +50,27 @@ function hasExecutionBoundRunName(workflow: string): boolean {
 function hasPromptLayerArtifact(workflow: string): boolean {
   return /append_event\s+"\$attempt_id"\s+artifact\s+"\$\(printf\s+'prompt_layers\\t%s'/.test(
     workflow,
+  );
+}
+
+function hasRestrictedCodexExecution(workflow: string): boolean {
+  return (
+    workflow.includes('codex exec --ephemeral --sandbox workspace-write') &&
+    workflow.includes('CODEX_HOME="$codex_home"') &&
+    !workflow.includes('--ignore-user-config') &&
+    workflow.includes('--json --cd "$GITHUB_WORKSPACE"')
+  );
+}
+
+function hasPinnedExecutorImage(workflow: string): boolean {
+  return (
+    /verify-executor-image:[\s\S]*?\[\[\s*"\$IMAGE"\s*=~\s*\^ghcr\\\.io\/liaowenjie15\/deepauto-executor@sha256:\[a-f0-9\]\{64}\$/.test(
+      workflow,
+    ) &&
+    /container:\n\s+image:\s*\$\{\{\s*needs\.verify-executor-image\.outputs\.image\s*}}/.test(
+      workflow,
+    ) &&
+    !/\bnpm\s+install\s+--global\s+@openai\/codex\b/.test(workflow)
   );
 }
 
@@ -76,6 +102,16 @@ export function inspectWorkflowBoundary(root: string): string[] {
   if (!hasPromptLayerArtifact(workflow)) {
     errors.push(
       `${EXECUTION_WORKFLOW_PATH}: must record the prompt_layers artifact`,
+    );
+  }
+  if (!hasRestrictedCodexExecution(workflow)) {
+    errors.push(
+      `${EXECUTION_WORKFLOW_PATH}: must run Codex with the generated provider configuration, workspace-write sandbox, and an ephemeral session`,
+    );
+  }
+  if (!hasPinnedExecutorImage(workflow)) {
+    errors.push(
+      `${EXECUTION_WORKFLOW_PATH}: must use the configured immutable executor image without dynamically installing Codex`,
     );
   }
   if (!/EXECUTION_ID:\s*\$\{\{\s*inputs\.execution_id\s*}}/.test(workflow)) {

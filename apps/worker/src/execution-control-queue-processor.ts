@@ -3,13 +3,12 @@ import { DelayedError, type Processor } from 'bullmq';
 import {
   type ExecutionCancellationControlDependencies,
   type ExecutionCancellationControlResult,
-  processExecutionCancellationControl,
+  processExecutionControl,
 } from './execution-control';
 
 const defaultReconciliationDelayMilliseconds = 5_000;
 
-type ProcessExecutionCancellationControl =
-  typeof processExecutionCancellationControl;
+type ProcessExecutionControl = typeof processExecutionControl;
 
 export type ExecutionControlQueueProcessorOptions = {
   reconciliationDelayMilliseconds?: number;
@@ -26,11 +25,11 @@ function assertPositiveInteger(value: number, name: string): void {
 export function createExecutionControlQueueProcessor(
   options: ExecutionControlQueueProcessorOptions,
   dependencies: ExecutionCancellationControlDependencies,
-  process = processExecutionCancellationControl as ProcessExecutionCancellationControl,
+  process = processExecutionControl as ProcessExecutionControl,
 ): Processor<
   ExecutionControlQueueData,
   ExecutionCancellationControlResult,
-  'execution-cancel'
+  'execution-control'
 > {
   const reconciliationDelayMilliseconds =
     options.reconciliationDelayMilliseconds ??
@@ -53,7 +52,7 @@ export function createExecutionControlQueueProcessor(
 
     await job.moveToDelayed(now() + reconciliationDelayMilliseconds, token);
     throw new DelayedError(
-      'GitHub Actions cancellation is awaiting reconciliation',
+      'GitHub Actions execution control is awaiting reconciliation',
     );
   };
 }
