@@ -4,9 +4,9 @@ import { normalizeLarkMessage } from './normalize-message';
 
 const sdkMessageEventSchema = z.object({
   app_id: z.string().trim().min(1).optional(),
-  tenant_key: z.string().trim().min(1),
   sender: z.object({
     sender_type: z.string(),
+    tenant_key: z.string().trim().min(1).optional(),
     sender_id: z.object({
       open_id: z.string().trim().min(1),
     }),
@@ -52,7 +52,8 @@ export function parseLarkSdkMessage(
 ): ParsedLarkMessage | null {
   const parsed = sdkMessageEventSchema.safeParse(event);
   if (!parsed.success) return null;
-  const { app_id, tenant_key, sender, message } = parsed.data;
+  const { app_id, sender, message } = parsed.data;
+  const tenant_key = sender.tenant_key ?? input.tenantKey;
   if (
     tenant_key !== input.tenantKey ||
     (app_id && app_id !== input.appId) ||

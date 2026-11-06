@@ -8,6 +8,8 @@ CREATE TABLE "LarkToolOperation" (
     "action" TEXT NOT NULL,
     "targetHash" TEXT NOT NULL,
     "payloadHash" TEXT NOT NULL,
+    "snapshotEncrypted" TEXT NOT NULL,
+    "providerResultEncrypted" TEXT,
     "state" "LarkToolOperationState" NOT NULL DEFAULT 'CLAIMED',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "finishedAt" TIMESTAMP(3),

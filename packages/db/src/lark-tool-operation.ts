@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PrismaClient } from './generated/prisma/client';
+import type { LarkTokenCipher } from './lark-token-cipher';
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -16,12 +17,15 @@ export async function claimLarkToolWrite(
     action: string;
     target: string;
     payload: unknown;
+    cipher: LarkTokenCipher;
   },
 ): Promise<{ operationId: string } | null> {
   const payloadHash = digest(JSON.stringify(input.payload));
   const targetHash = digest(input.target);
-  const operationKey = digest(
-    JSON.stringify([input.invocationId, input.action, targetHash, payloadHash]),
+  const operationKey = digest(input.invocationId);
+  const snapshotEncrypted = input.cipher.encrypt(
+    JSON.stringify({ action: input.action, target: input.target, payload: input.payload }),
+    `lark-operation:${input.workspaceId}:${input.invocationId}`,
   );
   try {
     return await prisma.$transaction(async (transaction) => {
@@ -57,6 +61,7 @@ export async function claimLarkToolWrite(
           action: input.action,
           targetHash,
           payloadHash,
+          snapshotEncrypted,
         },
         select: { id: true },
       });
@@ -91,6 +96,8 @@ export async function finishLarkToolWrite(
     workspaceId: string;
     actorId: string;
     succeeded: boolean;
+    result?: unknown;
+    cipher: LarkTokenCipher;
   },
 ): Promise<void> {
   await prisma.$transaction(async (transaction) => {
@@ -103,7 +110,7 @@ export async function finishLarkToolWrite(
           actorId: input.actorId,
         },
       },
-      select: { id: true, action: true },
+      select: { id: true, action: true, invocationId: true },
     });
     if (!operation) throw new Error('Lark tool operation claim was lost');
     await transaction.larkToolOperation.update({
@@ -111,6 +118,12 @@ export async function finishLarkToolWrite(
       data: {
         state: input.succeeded ? 'SUCCEEDED' : 'UNKNOWN',
         finishedAt: new Date(),
+        providerResultEncrypted: input.result === undefined
+          ? undefined
+          : input.cipher.encrypt(
+              JSON.stringify(input.result),
+              `lark-operation-result:${input.workspaceId}:${operation.invocationId}`,
+            ),
       },
     });
     await transaction.auditEvent.create({

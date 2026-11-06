@@ -223,6 +223,8 @@ model LarkToolOperation {
   action       String
   targetHash   String
   payloadHash  String
+  snapshotEncrypted String
+  providerResultEncrypted String?
   state        LarkToolOperationState @default(CLAIMED)
   createdAt    DateTime @default(now())
   finishedAt   DateTime?

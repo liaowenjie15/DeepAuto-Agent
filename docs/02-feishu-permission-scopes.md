@@ -195,7 +195,7 @@ drive.notice.comment_add_v1
 
 ## 5. 本轮运行规则
 
-聊天当前开放私聊/群 @、原话题回复、受控 PR、Docx 读取/追加和 Base 记录读写。每次飞书数据调用按操作校验授权；写入先持久化操作与审计记录。结果不确定时不自动重试。OAuth 回调使用 `http://localhost:7681/callback`，上线前需使用实际可访问的 HTTPS 地址重新配置。
+聊天当前开放私聊/群 @、原话题回复、受控 PR，以及私聊中的 Docx 读取/追加和 Base 记录读写。文档/Base 读取结果由服务端直接回给用户，不送入模型提示；用户 OAuth 只在私聊使用。Bot 的文档/Base 操作还需在 Worker 配置 `LARK_BOT_RESOURCE_TOKENS`，逐项列出批准给该测试工作区的文档 ID 或 Base app token。每次飞书数据调用按操作校验授权；每条消息最多一次数据写入，写入前持久化加密的具体变更与审计记录。结果不确定时不自动重试。OAuth 回调使用 `http://localhost:7681/callback`，上线前需使用实际可访问的 HTTPS 地址重新配置。
 
 ## 6. 与非飞书能力的边界
 

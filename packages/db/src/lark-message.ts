@@ -174,14 +174,39 @@ export async function claimNextLarkMessage(
   prisma: PrismaClient,
   input: { appId: string; tenantKey: string; workspaceId: string },
 ): Promise<ClaimedLarkMessage | null> {
-  const candidate = await prisma.larkMessage.findFirst({
-    where: {
-      appId: input.appId,
-      tenantKey: input.tenantKey,
-      processingState: 'QUEUED',
-      invocation: { workspaceId: input.workspaceId },
-    },
-    orderBy: { createdAt: 'asc' },
+  const eligible = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT message."id"
+    FROM "LarkMessage" AS message
+    JOIN "Invocation" AS invocation ON invocation."id" = message."invocationId"
+    WHERE message."appId" = ${input.appId}
+      AND message."tenantKey" = ${input.tenantKey}
+      AND message."processingState" = 'QUEUED'::"LarkProcessingState"
+      AND invocation."workspaceId" = ${input.workspaceId}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "LarkMessage" AS prior
+        JOIN "Invocation" AS prior_invocation ON prior_invocation."id" = prior."invocationId"
+        WHERE prior."appId" = message."appId"
+          AND prior."tenantKey" = message."tenantKey"
+          AND prior_invocation."workspaceId" = invocation."workspaceId"
+          AND prior_invocation."conversationKey" = invocation."conversationKey"
+          AND prior."processingState" IN (
+            'QUEUED'::"LarkProcessingState",
+            'CLAIMED'::"LarkProcessingState",
+            'WAITING_PR'::"LarkProcessingState"
+          )
+          AND (
+            prior."createdAt" < message."createdAt"
+            OR (prior."createdAt" = message."createdAt" AND prior."id" < message."id")
+          )
+      )
+    ORDER BY message."createdAt", message."id"
+    LIMIT 1
+  `;
+  const candidateId = eligible[0]?.id;
+  if (!candidateId) return null;
+  const candidate = await prisma.larkMessage.findUnique({
+    where: { id: candidateId },
     include: {
       invocation: {
         select: {
@@ -193,24 +218,7 @@ export async function claimNextLarkMessage(
       },
     },
   });
-  if (!candidate) return null;
-
-  const earlier = await prisma.larkMessage.findFirst({
-    where: {
-      id: { not: candidate.id },
-      invocation: {
-        workspaceId: input.workspaceId,
-        conversationKey: candidate.invocation.conversationKey,
-      },
-      OR: [
-        { createdAt: { lt: candidate.createdAt } },
-        { createdAt: candidate.createdAt, id: { lt: candidate.id } },
-      ],
-      processingState: { in: ['QUEUED', 'CLAIMED', 'WAITING_PR'] },
-    },
-    select: { id: true },
-  });
-  if (earlier) return null;
+  if (!candidate || candidate.appId !== input.appId || candidate.tenantKey !== input.tenantKey) return null;
 
   const claimed = await prisma.larkMessage.updateMany({
     where: {
@@ -311,7 +319,7 @@ export async function finishLarkProcessing(
     },
     data: {
       processingState: input.state,
-      finalText: input.finalText?.slice(0, 3_500),
+      finalText: input.finalText,
       processingFinishedAt:
         input.state === 'WAITING_PR' ? null : new Date(),
     },

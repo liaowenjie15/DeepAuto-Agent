@@ -7,7 +7,7 @@ import {
   markStaleLarkMessagesUnknown,
   type PrismaClient,
 } from '@deepauto/db';
-import { createFeishuClient } from '@deepauto/lark';
+import { createFeishuClient, type FeishuClient } from '@deepauto/lark';
 import { runLarkChatAgent, type LarkChatConfiguration } from './lark-chat-agent';
 
 export type LarkChatRuntime = { close(): Promise<void> };
@@ -15,10 +15,23 @@ export type LarkChatRuntime = { close(): Promise<void> };
 export function startLarkChatRuntime(
   prisma: PrismaClient,
   configuration: LarkChatConfiguration & { repository: string },
+  preparedClient?: FeishuClient,
 ): LarkChatRuntime {
-  const client = createFeishuClient(configuration);
+  const client = preparedClient ?? createFeishuClient(configuration);
   let stopped = false;
   let active: Promise<void> | undefined;
+
+  function replyContext(workspaceId: string, invocationId: string): string {
+    return `lark-reply:${workspaceId}:${invocationId}`;
+  }
+
+  function protectReply(workspaceId: string, invocationId: string, text: string): string {
+    return configuration.cipher.encrypt(text.slice(0, 3_500), replyContext(workspaceId, invocationId));
+  }
+
+  function openReply(workspaceId: string, invocationId: string, ciphertext: string): string {
+    return configuration.cipher.decrypt(ciphertext, replyContext(workspaceId, invocationId));
+  }
 
   async function deliver(invocationId: string, workspaceId: string, text: string): Promise<void> {
     const message = await prisma.larkMessage.findFirst({
@@ -81,37 +94,36 @@ export function startLarkChatRuntime(
         id: message.id,
         workspaceId: message.workspaceId,
         state: result.waitingPr ? 'WAITING_PR' : 'COMPLETED',
-        finalText: result.waitingPr ? undefined : result.text,
+        finalText: result.waitingPr ? undefined : protectReply(message.workspaceId, message.invocationId, result.text),
       });
       if (!result.waitingPr) {
         await deliver(message.invocationId, message.workspaceId, result.text);
       }
     } catch {
+      const prJob = await prisma.job.findFirst({
+        where: {
+          invocationId: message.invocationId,
+          invocation: { workspaceId: message.workspaceId, actorId: message.actorId, source: 'FEISHU' },
+        },
+        select: { id: true },
+      }).catch(() => null);
       await finishLarkProcessing(prisma, {
         id: message.id,
         workspaceId: message.workspaceId,
-        state: 'UNKNOWN',
+        state: prJob ? 'WAITING_PR' : 'UNKNOWN',
       }).catch(() => undefined);
-      await deliver(
-        message.invocationId,
-        message.workspaceId,
-        '本次处理结果不确定，请核对相关资源或任务状态。',
-      ).catch(() => undefined);
+      if (!prJob) {
+        await deliver(
+          message.invocationId,
+          message.workspaceId,
+          '本次处理结果不确定，请核对相关资源或任务状态。',
+        ).catch(() => undefined);
+      }
     }
   }
 
   async function processFinals(): Promise<void> {
-    const messages = await prisma.larkMessage.findMany({
-      where: {
-        appId: configuration.appId,
-        tenantKey: configuration.tenantKey,
-        invocation: { workspaceId: configuration.workspaceId },
-        finalReply: 'PENDING',
-        processingState: { in: ['WAITING_PR', 'COMPLETED', 'FAILED', 'UNKNOWN'] },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: 20,
-      select: {
+    const select = {
         id: true,
         invocationId: true,
         processingState: true,
@@ -141,12 +153,30 @@ export function startLarkChatRuntime(
             },
           },
         },
-      },
+      } as const;
+    const scope = {
+      appId: configuration.appId,
+      tenantKey: configuration.tenantKey,
+      invocation: { workspaceId: configuration.workspaceId },
+      finalReply: 'PENDING' as const,
+    };
+    const terminals = await prisma.larkMessage.findMany({
+      where: { ...scope, processingState: { in: ['COMPLETED', 'FAILED', 'UNKNOWN'] } },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+      select,
     });
+    const pendingPrs = await prisma.larkMessage.findMany({
+      where: { ...scope, processingState: 'WAITING_PR' },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+      select,
+    });
+    const messages = [...terminals, ...pendingPrs];
     for (const message of messages) {
       if (message.processingState === 'COMPLETED') {
         if (message.finalText) {
-          await deliver(message.invocationId, message.invocation.workspaceId, message.finalText);
+          await deliver(message.invocationId, message.invocation.workspaceId, openReply(message.invocation.workspaceId, message.invocationId, message.finalText));
         }
         continue;
       }
@@ -166,16 +196,23 @@ export function startLarkChatRuntime(
           data: {
             processingState: job.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED',
             processingFinishedAt: new Date(),
-            finalText: text,
+            finalText: protectReply(message.invocation.workspaceId, message.invocationId, text),
           },
         });
         if (updated.count === 1) await deliver(message.invocationId, message.invocation.workspaceId, text);
       } else {
+        if (message.processingState === 'UNKNOWN' && message.invocation.job) {
+          await prisma.larkMessage.updateMany({
+            where: { id: message.id, processingState: 'UNKNOWN' },
+            data: { processingState: 'WAITING_PR', processingFinishedAt: null },
+          });
+          continue;
+        }
         await deliver(
           message.invocationId,
           message.invocation.workspaceId,
           message.processingState === 'FAILED'
-            ? (message.finalText ?? '本次任务未能完成。')
+            ? (message.finalText ? openReply(message.invocation.workspaceId, message.invocationId, message.finalText) : '本次任务未能完成。')
             : '本次处理结果不确定，请核对相关资源或任务状态。',
         );
       }
@@ -201,7 +238,7 @@ export function startLarkChatRuntime(
       await processQueued();
     })();
     try {
-      await active;
+      await active?.catch(() => undefined);
     } finally {
       active = undefined;
     }
