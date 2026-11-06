@@ -19,6 +19,33 @@ enum InvocationAnchor {
   COMMENT
 }
 
+enum LarkDeliveryState {
+  PENDING
+  CLAIMED
+  SENT
+  UNKNOWN
+}
+
+enum LarkProcessingState {
+  QUEUED
+  CLAIMED
+  WAITING_PR
+  COMPLETED
+  FAILED
+  UNKNOWN
+}
+
+enum LarkChatType {
+  P2P
+  GROUP
+}
+
+enum LarkToolOperationState {
+  CLAIMED
+  SUCCEEDED
+  UNKNOWN
+}
+
 enum JobStatus {
   QUEUED
   RUNNING
@@ -115,9 +142,47 @@ model WorkspaceMember {
   githubLogin  String?
   createdAt    DateTime   @default(now())
   workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  larkConnections LarkUserConnection[]
+  larkOAuthStates LarkOAuthState[]
 
+  @@unique([id, workspaceId])
   @@unique([workspaceId, larkOpenId])
   @@unique([workspaceId, githubUserId])
+}
+
+model LarkOAuthState {
+  stateHash   String   @id
+  workspaceId String
+  actorId     String
+  tenantKey   String
+  scopes      String[]
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+  member      WorkspaceMember @relation(fields: [actorId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+model LarkUserConnection {
+  id                     String          @id @default(cuid())
+  workspaceId            String
+  actorId                String
+  appId                  String
+  tenantKey              String
+  openId                 String
+  accessTokenEncrypted   String
+  refreshTokenEncrypted  String
+  accessExpiresAt        DateTime
+  refreshExpiresAt       DateTime
+  refreshUncertainAt     DateTime?
+  scopes                 String[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  member                 WorkspaceMember @relation(fields: [actorId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([workspaceId, actorId, appId, tenantKey])
+  @@index([workspaceId, tenantKey])
 }
 
 model WorkspaceRepository {
@@ -144,9 +209,53 @@ model Invocation {
   receivedAt      DateTime
   createdAt       DateTime         @default(now())
   job             Job?
+  larkMessage     LarkMessage?
+  larkToolOperations LarkToolOperation[]
 
   @@unique([source, sourceEventId], map: "invocations_source_event_id_key")
   @@index([workspaceId, conversationKey])
+}
+
+model LarkToolOperation {
+  id           String @id @default(cuid())
+  invocationId String
+  operationKey String @unique
+  action       String
+  targetHash   String
+  payloadHash  String
+  state        LarkToolOperationState @default(CLAIMED)
+  createdAt    DateTime @default(now())
+  finishedAt   DateTime?
+  invocation   Invocation @relation(fields: [invocationId], references: [id], onDelete: Cascade)
+
+  @@index([invocationId, createdAt])
+}
+
+model LarkMessage {
+  id                 String            @id @default(cuid())
+  invocationId       String            @unique
+  appId              String
+  tenantKey          String
+  chatId             String
+  messageId          String
+  senderOpenId       String
+  chatType           LarkChatType
+  acknowledgement    LarkDeliveryState @default(PENDING)
+  acknowledgementAt  DateTime?
+  finalReply         LarkDeliveryState @default(PENDING)
+  finalReplyAt       DateTime?
+  finalReplyMessageId String?
+  finalText          String?
+  processingState    LarkProcessingState @default(QUEUED)
+  processingStartedAt DateTime?
+  processingFinishedAt DateTime?
+  createdAt          DateTime @default(now())
+  invocation         Invocation        @relation(fields: [invocationId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, tenantKey, messageId])
+  @@index([appId, tenantKey, chatId])
+  @@index([processingState, processingStartedAt])
+  @@index([processingState, createdAt])
 }
 
 model Job {

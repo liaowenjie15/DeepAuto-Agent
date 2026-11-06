@@ -19,12 +19,14 @@
     "test:unit": "bun test src"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.109",
     "@deepauto/agent-core": "workspace:*",
     "@deepauto/contracts": "workspace:*",
     "@deepauto/db": "workspace:*",
     "@deepauto/github": "workspace:*",
     "@deepauto/lark": "workspace:*",
     "@deepauto/runner-manager": "workspace:*",
+    "ai": "^7.0.163",
     "bullmq": "5.78.0",
     "dotenv": "17.4.2",
     "ioredis": "5.10.1",

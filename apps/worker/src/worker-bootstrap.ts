@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import {
+  createLarkTokenCipher,
   createPrismaClient,
   createRedisConnection,
   type PrismaClient,
@@ -18,6 +19,7 @@ import {
   type GitHubActionsWorkerRuntime,
   startGitHubActionsWorkerRuntime,
 } from './github-actions-worker-runtime';
+import { startLarkChatRuntime, type LarkChatRuntime } from './lark-chat-runtime';
 
 const optionalText = z.preprocess(
   (value) =>
@@ -45,6 +47,15 @@ const workerConfigurationSchema = z.object({
     'deepauto-execution-control',
   ),
   DEEPAUTO_WORKER_ID: optionalText,
+  LARK_APP_ID: optionalText,
+  LARK_APP_SECRET: optionalText,
+  LARK_TENANT_KEY: optionalText,
+  LARK_WORKSPACE_ID: optionalText,
+  LARK_OAUTH_REDIRECT_URI: optionalText,
+  LARK_TOKEN_ENCRYPTION_KEY: optionalText,
+  DEEPAUTO_CODEX_UPSTREAM_RESPONSES_URL: optionalText,
+  DEEPAUTO_CODEX_UPSTREAM_API_KEY: optionalText,
+  DEEPAUTO_CODEX_MODEL: optionalText,
 });
 
 export type WorkerConfiguration = z.infer<typeof workerConfigurationSchema>;
@@ -71,6 +82,20 @@ export function parseWorkerConfiguration(
 ): WorkerConfiguration {
   const parsed = workerConfigurationSchema.safeParse(environment);
   if (!parsed.success) throw new Error('Worker configuration is invalid');
+  const larkFields = [
+    parsed.data.LARK_APP_ID,
+    parsed.data.LARK_APP_SECRET,
+    parsed.data.LARK_TENANT_KEY,
+    parsed.data.LARK_WORKSPACE_ID,
+    parsed.data.LARK_OAUTH_REDIRECT_URI,
+    parsed.data.LARK_TOKEN_ENCRYPTION_KEY,
+    parsed.data.DEEPAUTO_CODEX_UPSTREAM_RESPONSES_URL,
+    parsed.data.DEEPAUTO_CODEX_UPSTREAM_API_KEY,
+    parsed.data.DEEPAUTO_CODEX_MODEL,
+  ];
+  if (larkFields.some(Boolean) && !larkFields.every(Boolean)) {
+    throw new Error('Worker Lark configuration is incomplete');
+  }
   return parsed.data;
 }
 
@@ -110,7 +135,18 @@ export function startWorkerRuntime(
       connection: redis,
       workerId,
     },
-    { prisma, redis, githubActionsExecutor: executor },
+    {
+      prisma,
+      redis,
+      githubActionsExecutor: executor,
+      larkTrust: configuration.LARK_APP_ID && configuration.LARK_TENANT_KEY && configuration.LARK_WORKSPACE_ID
+        ? {
+            appId: configuration.LARK_APP_ID,
+            tenantKey: configuration.LARK_TENANT_KEY,
+            workspaceId: configuration.LARK_WORKSPACE_ID,
+          }
+        : undefined,
+    },
   );
   const controlRuntime = startExecutionControlWorkerRuntime(
     {
@@ -120,12 +156,33 @@ export function startWorkerRuntime(
     { prisma, redis, githubActionsExecutor: executor },
   );
 
-  return createWorkerRuntime(executionRuntime, controlRuntime, prisma, redis);
+  const larkRuntime = configuration.LARK_APP_ID && configuration.LARK_APP_SECRET &&
+    configuration.LARK_TENANT_KEY && configuration.LARK_WORKSPACE_ID &&
+    configuration.LARK_OAUTH_REDIRECT_URI && configuration.LARK_TOKEN_ENCRYPTION_KEY &&
+    configuration.DEEPAUTO_CODEX_UPSTREAM_RESPONSES_URL &&
+    configuration.DEEPAUTO_CODEX_UPSTREAM_API_KEY && configuration.DEEPAUTO_CODEX_MODEL
+    ? startLarkChatRuntime(prisma, {
+        appId: configuration.LARK_APP_ID,
+        appSecret: configuration.LARK_APP_SECRET,
+        tenantKey: configuration.LARK_TENANT_KEY,
+        workspaceId: configuration.LARK_WORKSPACE_ID,
+        redirectUri: configuration.LARK_OAUTH_REDIRECT_URI,
+        cipher: createLarkTokenCipher(configuration.LARK_TOKEN_ENCRYPTION_KEY),
+        responsesUrl: configuration.DEEPAUTO_CODEX_UPSTREAM_RESPONSES_URL,
+        apiKey: configuration.DEEPAUTO_CODEX_UPSTREAM_API_KEY,
+        model: configuration.DEEPAUTO_CODEX_MODEL,
+        repositoryId: configuration.DEEPAUTO_GITHUB_REPOSITORY_ID,
+        repository: configuration.DEEPAUTO_GITHUB_REPOSITORY,
+      })
+    : undefined;
+
+  return createWorkerRuntime(executionRuntime, controlRuntime, larkRuntime, prisma, redis);
 }
 
 function createWorkerRuntime(
   executionRuntime: GitHubActionsWorkerRuntime,
   controlRuntime: ExecutionControlWorkerRuntime,
+  larkRuntime: LarkChatRuntime | undefined,
   prisma: PrismaClient,
   redis: IORedis,
 ): WorkerRuntime {
@@ -135,6 +192,7 @@ function createWorkerRuntime(
     async close() {
       if (closed) return;
       closed = true;
+      await larkRuntime?.close();
       await controlRuntime.close();
       await executionRuntime.close();
       await redis.quit();

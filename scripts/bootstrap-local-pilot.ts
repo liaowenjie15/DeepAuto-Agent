@@ -10,6 +10,7 @@ export type PilotBootstrapInput = {
   DEEPAUTO_PILOT_WORKSPACE_ID: string;
   DEEPAUTO_PILOT_GITHUB_USER_ID: string;
   DEEPAUTO_PILOT_GITHUB_LOGIN: string;
+  DEEPAUTO_PILOT_LARK_OPEN_ID?: string;
   DEEPAUTO_PILOT_REPOSITORY_ID: string;
 };
 
@@ -45,6 +46,8 @@ export function parsePilotBootstrapInput(
       environment,
       'DEEPAUTO_PILOT_GITHUB_LOGIN',
     ),
+    DEEPAUTO_PILOT_LARK_OPEN_ID:
+      environment.DEEPAUTO_PILOT_LARK_OPEN_ID?.trim() || undefined,
     DEEPAUTO_PILOT_REPOSITORY_ID: requiredEnvironmentValue(
       environment,
       'DEEPAUTO_PILOT_REPOSITORY_ID',
@@ -73,6 +76,9 @@ export async function bootstrapLocalPilot(
         role: MemberRole.ADMIN,
         active: true,
         githubLogin: input.DEEPAUTO_PILOT_GITHUB_LOGIN,
+        ...(input.DEEPAUTO_PILOT_LARK_OPEN_ID
+          ? { larkOpenId: input.DEEPAUTO_PILOT_LARK_OPEN_ID }
+          : {}),
       },
       create: {
         workspaceId: input.DEEPAUTO_PILOT_WORKSPACE_ID,
@@ -80,6 +86,7 @@ export async function bootstrapLocalPilot(
         active: true,
         githubUserId: input.DEEPAUTO_PILOT_GITHUB_USER_ID,
         githubLogin: input.DEEPAUTO_PILOT_GITHUB_LOGIN,
+        larkOpenId: input.DEEPAUTO_PILOT_LARK_OPEN_ID,
       },
     });
     const repository = await transaction.workspaceRepository.upsert({

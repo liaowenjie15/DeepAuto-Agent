@@ -1,7 +1,7 @@
 # DeepAuto Agent：飞书权限 Scope 配置记录
 
 > 记录日期：2026-10-18  
-> 状态：以下“用户身份权限”已在飞书开放平台完成勾选。  
+> 状态：以下只读用户身份权限已在飞书开放平台完成勾选；写入 scope 需要按操作新增、发布，并由每位用户重新 OAuth 授权。  
 > 前置文档：[01-feishu-bot-setup.md](./01-feishu-bot-setup.md)
 
 ## 1. 权限模型
@@ -11,12 +11,12 @@ DeepAuto 的飞书权限分为两类，不能混用：
 | 类型 | Token | 用途 |
 | --- | --- | --- |
 | 应用身份权限 | `tenant_access_token` | 机器人收发消息、添加 reaction、创建/修改机器人有权访问的文档和表格 |
-| 用户身份权限 | `user_access_token` | 用户 OAuth 授权后，只读访问“用户有权限、但机器人不可访问”的私人资源 |
+| 用户身份权限 | `user_access_token` | 用户 OAuth 授权后，按本次申请的 scope 读写自己的私人资源 |
 
 安全边界：
 
-- 用户身份 token 只用于**读取**私有上下文。
-- 创建文档、写表格、发送消息等**写操作始终使用 bot 的应用身份 token**。
+- 用户身份 token 只用于当前用户已授权的文档/Base 操作；发送聊天回复仍使用 bot。
+- 私人资源的写入必须具备当前操作对应的用户 scope 和资源访问权，明确的聊天指令作为写入意图，并记录审计。
 - 应用后台已开通用户身份权限，不代表机器人自动获得所有用户的私有数据；每位用户仍需完成 OAuth 授权。
 - 用户最终获得的 scope 是：`OAuth 请求范围 ∩ 应用已开通权限 ∩ 用户同意范围`。
 
@@ -105,6 +105,30 @@ task:comment:read
 
 用途：读取用户可访问的任务、任务清单和任务评论。
 
+### 2.7 用户身份写入 scope（本轮新增）
+
+在飞书开放平台的**用户身份权限**中按实际操作申请并发布以下 scope。用户授权时只请求当前工具所需 scope 与 `offline_access`；新增权限后，已有授权需重新完成 OAuth。
+
+```text
+docx:document:create
+docx:document:write_only
+base:app:create
+base:record:create
+base:record:update
+base:record:delete
+base:table:create
+base:table:delete
+base:field:create
+base:field:update
+base:field:delete
+space:document:move
+space:document:delete
+docs:permission.member:create
+docs:permission.member:delete
+```
+
+当前服务端实际开放的写工具是 Docx 文本追加和 Base 记录创建、修改、删除；分别使用 `docx:document:write_only`、`base:record:create`、`base:record:update`、`base:record:delete`。其余 scope 仅是后续对应操作的申请清单，当前没有暴露相应工具。
+
 ## 3. 应用身份权限：聊天 MVP 必需项
 
 下面这些是机器人本身使用 `tenant_access_token` 运行聊天闭环所需的权限，应在 **权限管理 → 应用身份权限** 中配置：
@@ -169,15 +193,9 @@ docs:document.comment:create
 drive.notice.comment_add_v1
 ```
 
-## 5. 尚未实现时的运行规则
+## 5. 本轮运行规则
 
-虽然用户身份 scope 已开通，第一阶段后端仍应遵循：
-
-1. 不创建 OAuth 登录链接。
-2. 不请求、不保存、不刷新任何 `user_access_token` 或 `refresh_token`。
-3. 不向 Agent 暴露文档、云盘、日历、妙记、通讯录或任务工具。
-4. 只启用机器人聊天最小闭环：接收消息、reaction、线程回复、异步 Agent 调用。
-5. 每增加一个工具，再明确它使用 bot token 还是 user token、只读还是写入、是否需要用户确认、如何审计。
+聊天当前开放私聊/群 @、原话题回复、受控 PR、Docx 读取/追加和 Base 记录读写。每次飞书数据调用按操作校验授权；写入先持久化操作与审计记录。结果不确定时不自动重试。OAuth 回调使用 `http://localhost:7681/callback`，上线前需使用实际可访问的 HTTPS 地址重新配置。
 
 ## 6. 与非飞书能力的边界
 

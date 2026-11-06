@@ -8,7 +8,7 @@ const capabilityIdSchema = z
 
 export const executionCapabilitySchema = z.object({
   id: capabilityIdSchema,
-  allowedSources: z.array(z.enum(['github'])).min(1),
+  allowedSources: z.array(z.enum(['github', 'feishu'])).min(1),
   repositoryAllowlist: z.literal('workspace-enabled'),
   executor: z.literal('github-actions-codex'),
   workflow: z.literal('deepauto-execute.yml'),
@@ -44,7 +44,7 @@ export type ExecutionCapabilitySnapshot = z.infer<
 export const registeredExecutionCapabilities: readonly ExecutionCapability[] = [
   {
     id: 'repository.change-pr.v1',
-    allowedSources: ['github'],
+    allowedSources: ['github', 'feishu'],
     repositoryAllowlist: 'workspace-enabled',
     executor: 'github-actions-codex',
     workflow: 'deepauto-execute.yml',
@@ -129,5 +129,5 @@ export function allowsExecutionCapabilitySource(
   capability: ExecutionCapability,
   source: string,
 ): boolean {
-  return capability.allowedSources.includes(source as 'github');
+  return capability.allowedSources.includes(source as 'github' | 'feishu');
 }
