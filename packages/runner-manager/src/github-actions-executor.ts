@@ -1,3 +1,4 @@
+import { resolveExecutionCapability } from '@deepauto/contracts';
 import type {
   GitHubWorkflowController,
   GitHubWorkflowDispatch,
@@ -11,6 +12,7 @@ const githubActionsExecutorConfigSchema = z.object({
     .string()
     .trim()
     .regex(/^[^/\s]+\/[^/\s]+$/, 'Repository must be owner/repository'),
+  repositoryId: z.string().trim().min(1, 'Repository ID is required'),
   workflow: z.string().trim().min(1),
   workflowRef: z.string().trim().min(1),
 });
@@ -127,6 +129,19 @@ export class GitHubActionsExecutor implements ExecutorAdapter {
   ) {
     this.#configuration =
       githubActionsExecutorConfigSchema.parse(configuration);
+    const capability = resolveExecutionCapability();
+    if (
+      this.#configuration.workflow !== capability.workflow ||
+      this.#configuration.workflowRef !== capability.workflowRef
+    ) {
+      throw new Error(
+        `GitHub Actions workflow is not registered: ${this.#configuration.workflow}@${this.#configuration.workflowRef}`,
+      );
+    }
+  }
+
+  isConfiguredForRepository(repositoryId: string): boolean {
+    return this.#configuration.repositoryId === repositoryId;
   }
 
   async start(

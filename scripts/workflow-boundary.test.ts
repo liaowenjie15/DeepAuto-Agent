@@ -71,6 +71,31 @@ it('requires the versioned prompt layer artifact', () => {
   );
 });
 
+it('requires the restricted Codex execution profile', () => {
+  const workflow = readFileSync(executionWorkflowPath, 'utf8');
+  const root = fixture(
+    workflow.replace(
+      '--sandbox workspace-write',
+      '--sandbox danger-full-access',
+    ),
+  );
+
+  expect(inspectWorkflowBoundary(root)).toContain(
+    '.github/workflows/deepauto-execute.yml: must run Codex with the generated provider configuration, workspace-write sandbox, and an ephemeral session',
+  );
+});
+
+it('rejects Codex sandbox bypasses and additional writable directories', () => {
+  const workflow = readFileSync(executionWorkflowPath, 'utf8');
+  const root = fixture(
+    workflow.replace('--ephemeral', '--ephemeral --add-dir /tmp'),
+  );
+
+  expect(inspectWorkflowBoundary(root)).toContain(
+    '.github/workflows/deepauto-execute.yml: must not bypass the Codex sandbox or add writable directories',
+  );
+});
+
 it('rejects direct credentials and datastore access', () => {
   const workflow = readFileSync(executionWorkflowPath, 'utf8');
   const root = fixture(

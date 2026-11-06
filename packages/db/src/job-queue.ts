@@ -82,14 +82,19 @@ export async function publishPendingExecutionControlEvents(
   limit = 100,
 ): Promise<number> {
   const events = await prisma.outboxEvent.findMany({
-    where: { publishedAt: null, kind: 'EXECUTION_CANCEL' },
+    where: {
+      publishedAt: null,
+      kind: {
+        in: ['EXECUTION_CANCEL', 'EXECUTION_CONVERSATION_RELEASE'],
+      },
+    },
     orderBy: { createdAt: 'asc' },
     take: limit,
   });
 
   for (const event of events) {
     await queue.add(
-      'execution-cancel',
+      'execution-control',
       { outboxEventId: event.id },
       { jobId: `execution-control:${event.id}` },
     );
@@ -130,6 +135,22 @@ export async function releaseConversationClaim(
     ownerId,
   );
   return released === 1;
+}
+
+export async function renewConversationClaim(
+  redis: IORedis,
+  conversationKey: string,
+  ownerId: string,
+  ttlMilliseconds: number,
+): Promise<boolean> {
+  const renewed = await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+    1,
+    `deepauto:conversation:${conversationKey}`,
+    ownerId,
+    ttlMilliseconds,
+  );
+  return renewed === 1;
 }
 
 export async function transferConversationClaim(

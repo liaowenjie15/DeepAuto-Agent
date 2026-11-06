@@ -29,6 +29,50 @@ services:
       timeout: 3s
       retries: 10
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    profiles: ["worker"]
+    restart: unless-stopped
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-deepauto}:${POSTGRES_PASSWORD:-deepauto_local}@postgres:5432/${POSTGRES_DB:-deepauto}
+      REDIS_URL: redis://redis:6379
+      DEEPAUTO_GITHUB_REPOSITORY: ${DEEPAUTO_GITHUB_REPOSITORY:-liaowenjie15/DeepAuto-Agent}
+      DEEPAUTO_GITHUB_REPOSITORY_ID: ${DEEPAUTO_GITHUB_REPOSITORY_ID:-1423344804}
+      DEEPAUTO_EXECUTION_QUEUE_NAME: ${DEEPAUTO_EXECUTION_QUEUE_NAME:-deepauto-execute}
+      DEEPAUTO_EXECUTION_CONTROL_QUEUE_NAME: ${DEEPAUTO_EXECUTION_CONTROL_QUEUE_NAME:-deepauto-execution-control}
+      DEEPAUTO_WORKER_ID: ${DEEPAUTO_WORKER_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    profiles: ["gateway"]
+    restart: unless-stopped
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-deepauto}:${POSTGRES_PASSWORD:-deepauto_local}@postgres:5432/${POSTGRES_DB:-deepauto}
+      DEEPAUTO_GATEWAY_HOST: 0.0.0.0
+      DEEPAUTO_GATEWAY_PORT: 3000
+    ports:
+      - "127.0.0.1:${DEEPAUTO_GATEWAY_HOST_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   deepauto_postgres_data:
   deepauto_redis_data:

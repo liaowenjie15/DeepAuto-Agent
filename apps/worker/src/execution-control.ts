@@ -2,6 +2,7 @@ import {
   ExecutionStatus,
   failExecutionCancellation,
   getExecutionCancellationControl,
+  getExecutionConversationReleaseControl,
   type PrismaClient,
   recordExecutionCancellationAttempt,
   recordExecutionCancellationReconciliationFailure,
@@ -75,10 +76,28 @@ async function finalizeExternalTerminalState(
       now,
     },
   );
-  if (accepted) {
-    await releaseGitHubActionsExecutionConversation(executionId, dependencies);
-  }
   return { status: accepted ? 'completed' : 'skipped' };
+}
+
+async function processExecutionConversationReleaseControl(
+  input: ExecutionCancellationControlInput,
+  dependencies: ExecutionCancellationControlDependencies,
+): Promise<ExecutionCancellationControlResult | null> {
+  const control = await getExecutionConversationReleaseControl(
+    dependencies.prisma,
+    input.outboxEventId,
+  );
+  if (!control) return null;
+
+  try {
+    await releaseGitHubActionsExecutionConversation(
+      control.executionId,
+      dependencies,
+    );
+    return { status: 'completed' };
+  } catch {
+    return { status: 'retry' };
+  }
 }
 
 async function failAfterExhaustedReconciliation(
@@ -269,4 +288,16 @@ export async function processExecutionCancellationControl(
     );
   }
   return { status: 'retry' };
+}
+
+export async function processExecutionControl(
+  input: ExecutionCancellationControlInput,
+  dependencies: ExecutionCancellationControlDependencies,
+): Promise<ExecutionCancellationControlResult> {
+  const releaseResult = await processExecutionConversationReleaseControl(
+    input,
+    dependencies,
+  );
+  if (releaseResult) return releaseResult;
+  return processExecutionCancellationControl(input, dependencies);
 }

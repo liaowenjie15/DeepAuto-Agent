@@ -125,7 +125,6 @@ export type GatewayConfiguration = {
   githubCommentReceiptPublisher?: GitHubCommentReceiptPublisher;
   codexProxy?: CodexProxyConfiguration;
   pilotAdmission?: PilotAdmissionProvider;
-  onExecutionCallbackAccepted?: (executionId: string) => Promise<void>;
   executionService?: GatewayExecutionService;
   now?: () => Date;
 };
@@ -174,6 +173,8 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
   const codexProxy = configuration.codexProxy
     ? configuredCodexProxy(configuration.codexProxy)
     : undefined;
+
+  app.get('/healthz', (context) => context.json({ status: 'ok' }));
 
   app.post('/github/webhooks', async (context) => {
     const rawBody = await context.req.text();
@@ -498,13 +499,6 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
             now: configuration.now?.(),
           },
         );
-      if (result.accepted) {
-        try {
-          await configuration.onExecutionCallbackAccepted?.(
-            context.req.param('executionId'),
-          );
-        } catch {}
-      }
       return context.json(
         { status: result.accepted ? 'accepted' : 'rejected' },
         result.accepted ? 202 : 409,

@@ -23,13 +23,15 @@ const environment = getTestEnvironment();
 const prisma = createPrismaClient(environment.databaseUrl);
 const redis = createRedisConnection(environment.redisUrl);
 const testPrefix = `worker-integration-${crypto.randomUUID()}`;
+const workspaceId = `${testPrefix}-workspace`;
+const repositoryId = 'repository-1';
 
 function input(
   overrides: Partial<Parameters<typeof createOrGetInvocationJob>[1]> = {},
 ) {
   return {
     source: 'github' as const,
-    workspaceId: `${testPrefix}-workspace`,
+    workspaceId,
     actorId: 'user-1',
     conversationKey: `${testPrefix}-conversation`,
     anchor: 'comment' as const,
@@ -37,6 +39,7 @@ function input(
     sourceEventId: `${testPrefix}-event-1`,
     receivedAt: new Date('2026-10-20T00:00:00.000Z'),
     idempotencyKey: `${testPrefix}-job-1`,
+    repositoryId,
     ...overrides,
   };
 }
@@ -71,10 +74,22 @@ function completedHarnessResult(request: CliHarnessRequest) {
 
 beforeEach(async () => {
   await prisma.job.deleteMany({
-    where: { invocation: { workspaceId: `${testPrefix}-workspace` } },
+    where: { invocation: { workspaceId } },
   });
   await prisma.invocation.deleteMany({
-    where: { workspaceId: `${testPrefix}-workspace` },
+    where: { workspaceId },
+  });
+  await prisma.workspace.upsert({
+    where: { id: workspaceId },
+    create: { id: workspaceId },
+    update: {},
+  });
+  await prisma.workspaceRepository.upsert({
+    where: {
+      workspaceId_providerRepositoryId: { workspaceId, providerRepositoryId: repositoryId },
+    },
+    create: { workspaceId, providerRepositoryId: repositoryId, enabled: true },
+    update: { enabled: true },
   });
   await redis.del(`deepauto:conversation:${testPrefix}-conversation`);
 });
@@ -253,6 +268,7 @@ describe('worker execution integration', () => {
         redis,
         now: () => new Date('2026-10-20T00:00:00.000Z'),
         githubActionsExecutor: {
+          isConfiguredForRepository: () => true,
           start: async ({ executionId }) => {
             dispatchedExecutionId = executionId;
             return { executionRef: `github-actions:sandbox:${executionId}` };
@@ -314,6 +330,7 @@ describe('worker execution integration', () => {
         prisma,
         redis,
         githubActionsExecutor: {
+          isConfiguredForRepository: () => true,
           start: async () => {
             throw new Error('simulated workflow dispatch failure');
           },
@@ -353,7 +370,14 @@ describe('worker execution integration', () => {
         jobId: created.job.id,
         workerId: `${testPrefix}-worker`,
       },
-      { prisma, redis, githubActionsExecutor: retryableExecutor },
+      {
+        prisma,
+        redis,
+        githubActionsExecutor: {
+          ...retryableExecutor,
+          isConfiguredForRepository: () => true,
+        },
+      },
     );
     expect(first.status).toBe('retry_scheduled');
     expect(
@@ -371,7 +395,14 @@ describe('worker execution integration', () => {
         jobId: created.job.id,
         workerId: `${testPrefix}-worker`,
       },
-      { prisma, redis, githubActionsExecutor: retryableExecutor },
+      {
+        prisma,
+        redis,
+        githubActionsExecutor: {
+          ...retryableExecutor,
+          isConfiguredForRepository: () => true,
+        },
+      },
     );
     expect(second.status).toBe('retry_scheduled');
 
@@ -380,7 +411,14 @@ describe('worker execution integration', () => {
         jobId: created.job.id,
         workerId: `${testPrefix}-worker`,
       },
-      { prisma, redis, githubActionsExecutor: retryableExecutor },
+      {
+        prisma,
+        redis,
+        githubActionsExecutor: {
+          ...retryableExecutor,
+          isConfiguredForRepository: () => true,
+        },
+      },
     );
     expect(third.status).toBe('failed');
     expect(

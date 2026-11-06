@@ -1,0 +1,23 @@
+FROM oven/bun:1.4.2 AS build
+
+WORKDIR /app
+
+COPY package.json bun.lock ./
+COPY apps ./apps
+COPY packages ./packages
+COPY scripts ./scripts
+COPY .github ./.github
+COPY biome.json turbo.json tsconfig.base.json ./
+
+RUN bun install --frozen-lockfile
+RUN bun run build
+
+FROM oven/bun:1.4.2
+
+WORKDIR /app
+
+COPY --from=build /app /app
+
+ENV NODE_ENV=production
+
+CMD ["bun", "run", "--cwd", "apps/worker", "start"]

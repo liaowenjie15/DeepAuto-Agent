@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './capability-registry';
+
 export const invocationSchema = z.object({
   source: z.enum(['feishu', 'github']),
   workspaceId: z.string().trim().min(1),

@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  type ExecutionCapabilitySnapshot,
   type ExecutionEvent,
   type ExecutionResult,
+  executionCapabilitySnapshotSchema,
   executionResultSchema,
 } from '@deepauto/contracts';
 import {
@@ -11,7 +13,7 @@ import {
   ExecutionEventType,
   ExecutionFailureCategory,
   ExecutionLogProvider,
-  type ExecutionStatus,
+  ExecutionStatus,
   JobStatus,
   type Prisma,
   type PrismaClient,
@@ -22,6 +24,7 @@ export type StartExecutionInput = {
   callbackExpiresAt: Date;
   bootstrapCapabilityHash?: string;
   bootstrapExpiresAt?: Date;
+  capabilitySnapshot?: ExecutionCapabilitySnapshot;
 };
 
 type TerminalExecutionStatus = Exclude<ExecutionStatus, 'RUNNING'>;
@@ -51,6 +54,13 @@ export type ExpiredExecutionCallback = {
   executionId: string;
   attemptId: string;
   externalRunId: bigint;
+};
+
+export type ActiveBoundExecution = {
+  executionId: string;
+  conversationKey: string;
+  jobId: string;
+  actorId: string;
 };
 
 export type ExecutionBootstrap = {
@@ -338,6 +348,9 @@ export async function startExecution(
       'Execution bootstrap capability expiry must be in the future',
     );
   }
+  const capabilitySnapshot = input.capabilitySnapshot
+    ? executionCapabilitySnapshotSchema.parse(input.capabilitySnapshot)
+    : undefined;
 
   return prisma.$transaction(async (transaction) => {
     const attempt = await transaction.jobAttempt.findFirst({
@@ -358,6 +371,11 @@ export async function startExecution(
         attemptId: attempt.id,
         bootstrapCapabilityHash: input.bootstrapCapabilityHash,
         bootstrapExpiresAt: input.bootstrapExpiresAt,
+        capabilityId: capabilitySnapshot?.id,
+        capabilityPolicyHash: capabilitySnapshot?.policyHash,
+        capabilityPolicy: capabilitySnapshot?.policy as
+          | Prisma.InputJsonValue
+          | undefined,
         callbackClaim: { create: { expiresAt: input.callbackExpiresAt } },
       },
       include: { callbackClaim: true },
@@ -543,6 +561,7 @@ async function acceptExecutionCallbackWithOptions(
       select: {
         id: true,
         attemptId: true,
+        externalRunId: true,
         cancellationRequest: { select: { id: true } },
       },
     });
@@ -654,6 +673,15 @@ async function acceptExecutionCallbackWithOptions(
       });
     }
 
+    await transaction.outboxEvent.create({
+      data: {
+        jobId: attempt.jobId,
+        kind: 'EXECUTION_CONVERSATION_RELEASE',
+        queueSequence: attempt.number,
+        dedupeKey: `execution:${execution.id}:conversation-release`,
+      },
+    });
+
     return retryScheduled
       ? { accepted: true, retryScheduled: true }
       : { accepted: true };
@@ -693,6 +721,37 @@ export async function getExpiredBoundExecutionCallbacks(
         ]
       : [],
   );
+}
+
+export async function getActiveBoundExecutions(
+  prisma: PrismaClient,
+): Promise<ActiveBoundExecution[]> {
+  const executions = await prisma.execution.findMany({
+    where: {
+      status: ExecutionStatus.RUNNING,
+      externalRunId: { not: null },
+    },
+    select: {
+      id: true,
+      attempt: {
+        select: {
+          jobId: true,
+          job: {
+            select: {
+              conversationKey: true,
+              invocation: { select: { actorId: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+  return executions.map((execution) => ({
+    executionId: execution.id,
+    conversationKey: execution.attempt.job.conversationKey,
+    jobId: execution.attempt.jobId,
+    actorId: execution.attempt.job.invocation.actorId,
+  }));
 }
 
 export async function acceptExpiredExecutionCallback(

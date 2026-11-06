@@ -95,6 +95,7 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
       oidcTrustPolicy: {
         audience: 'deepauto-actions',
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repositoryId: '1423344804',
         workflowRef:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -102,6 +103,7 @@ test('returns execution context only after a trusted GitHub Actions OIDC check',
       },
       verifyOidcToken: async () => ({
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repository_id: '1423344804',
         workflow_ref:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -161,6 +163,7 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
       oidcTrustPolicy: {
         audience: 'deepauto-actions',
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repositoryId: '1423344804',
         workflowRef:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -168,6 +171,7 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
       },
       verifyOidcToken: async () => ({
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repository_id: '1423344804',
         workflow_ref:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -259,7 +263,6 @@ test('issues a short-lived Codex proxy token without exposing the upstream crede
 
 test('accepts a terminal callback without exposing the callback claim', async () => {
   let callbackInput: Record<string, unknown> | undefined;
-  let releasedExecutionId: string | undefined;
   const app = createGatewayApp({
     prisma: {} as never,
     githubWebhookSecret: 'secret',
@@ -269,6 +272,7 @@ test('accepts a terminal callback without exposing the callback claim', async ()
       oidcTrustPolicy: {
         audience: 'deepauto-actions',
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repositoryId: '1423344804',
         workflowRef:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -276,6 +280,7 @@ test('accepts a terminal callback without exposing the callback claim', async ()
       },
       verifyOidcToken: async () => ({
         repository: 'liaowenjie15/deepauto-harness-sandbox',
+        repository_id: '1423344804',
         workflow_ref:
           'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
         ref: 'refs/heads/main',
@@ -283,9 +288,6 @@ test('accepts a terminal callback without exposing the callback claim', async ()
         run_id: '123',
         run_attempt: 1,
       }),
-    },
-    onExecutionCallbackAccepted: async (executionId) => {
-      releasedExecutionId = executionId;
     },
     executionService: {
       consumeExecutionBootstrapCapability: async () => true,
@@ -331,5 +333,4 @@ test('accepts a terminal callback without exposing the callback claim', async ()
     result: { status: 'COMPLETED' },
   });
   expect(callbackInput).not.toHaveProperty('callbackClaimId');
-  expect(releasedExecutionId).toBe('execution-1');
 });

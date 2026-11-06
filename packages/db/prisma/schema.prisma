@@ -37,6 +37,7 @@ enum AttemptStatus {
 enum OutboxEventKind {
   JOB_ENQUEUE
   EXECUTION_CANCEL
+  EXECUTION_CONVERSATION_RELEASE
 }
 
 enum ExecutionCancellationRequestStatus {
@@ -138,6 +139,7 @@ model Invocation {
   conversationKey String
   anchor          InvocationAnchor
   instruction     String
+  repositoryId    String?
   sourceEventId   String
   receivedAt      DateTime
   createdAt       DateTime         @default(now())
@@ -152,6 +154,9 @@ model Job {
   invocationId         String    @unique
   conversationKey String
   idempotencyKey       String    @unique
+  capabilityId         String?
+  capabilityPolicyHash String?
+  capabilityPolicy     Json?
   status               JobStatus @default(QUEUED)
   currentAttemptNumber Int       @default(0)
   cancelledAt          DateTime?
@@ -162,6 +167,7 @@ model Job {
   outboxEvents         OutboxEvent[]
 
   @@index([conversationKey, status])
+  @@index([capabilityId])
 }
 
 model JobAttempt {
@@ -187,6 +193,9 @@ model Execution {
   bootstrapCapabilityHash String?
   bootstrapExpiresAt DateTime?
   bootstrapUsedAt  DateTime?
+  capabilityId      String?
+  capabilityPolicyHash String?
+  capabilityPolicy  Json?
   externalUrl     String?
   reason          String?
   failureCategory ExecutionFailureCategory?
@@ -208,6 +217,7 @@ model Execution {
 
   @@index([status, startedAt])
   @@index([bootstrapExpiresAt])
+  @@index([capabilityId])
 }
 
 model ExecutionCancellationRequest {

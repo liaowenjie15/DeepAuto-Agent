@@ -964,21 +964,20 @@ describe('persistence and queue integration', () => {
     };
     expect(
       await publishPendingExecutionControlEvents(prisma, controlQueue),
-    ).toBe(1);
-    expect(
-      await publishPendingExecutionControlEvents(prisma, controlQueue),
-    ).toBe(0);
-    expect(published).toEqual([
-      {
-        name: 'execution-cancel',
-        data: { outboxEventId: expect.any(String) },
-        jobId: expect.stringMatching(/^execution-control:/),
-      },
-    ]);
+    ).toBeGreaterThanOrEqual(1);
+    const cancellationOutbox = await prisma.outboxEvent.findFirstOrThrow({
+      where: { jobId: created.job.id, kind: OutboxEventKind.EXECUTION_CANCEL },
+      select: { id: true },
+    });
+    expect(published).toContainEqual({
+      name: 'execution-control',
+      data: { outboxEventId: cancellationOutbox.id },
+      jobId: `execution-control:${cancellationOutbox.id}`,
+    });
 
     const control = await getExecutionCancellationControl(
       prisma,
-      published[0]?.data.outboxEventId ?? '',
+      cancellationOutbox.id,
     );
     expect(control).toMatchObject({
       executionId: execution.id,

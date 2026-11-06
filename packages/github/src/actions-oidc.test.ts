@@ -8,6 +8,7 @@ import {
 const policy = {
   audience: 'deepauto-actions',
   repository: 'liaowenjie15/deepauto-harness-sandbox',
+  repositoryId: '1423344804',
   workflowRef:
     'liaowenjie15/deepauto-harness-sandbox/.github/workflows/deepauto-execute.yml@refs/heads/main',
   ref: 'refs/heads/main',
@@ -16,6 +17,7 @@ const policy = {
 
 const claims: JWTPayload = {
   repository: policy.repository,
+  repository_id: policy.repositoryId,
   workflow_ref: policy.workflowRef,
   ref: policy.ref,
   event_name: policy.eventName,
@@ -26,6 +28,7 @@ const claims: JWTPayload = {
 test('accepts only the configured GitHub Actions repository and workflow', () => {
   expect(assertGitHubActionsOidcClaims(claims, policy)).toEqual({
     repository: policy.repository,
+    repository_id: policy.repositoryId,
     workflow_ref: policy.workflowRef,
     ref: policy.ref,
     event_name: policy.eventName,
@@ -38,6 +41,12 @@ test('accepts only the configured GitHub Actions repository and workflow', () =>
       policy,
     ),
   ).toThrow('workflow claim is not trusted');
+  expect(() =>
+    assertGitHubActionsOidcClaims(
+      { ...claims, repository_id: '1423344805' },
+      policy,
+    ),
+  ).toThrow('repository ID claim is not trusted');
   expect(() =>
     assertGitHubActionsOidcClaims(
       { ...claims, ref: 'refs/heads/feature' },

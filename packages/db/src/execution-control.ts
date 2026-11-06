@@ -24,6 +24,11 @@ export type ExecutionCancellationControl = {
     | typeof ExecutionCancellationRequestStatus.DISPATCHED;
 };
 
+export type ExecutionConversationReleaseControl = {
+  executionId: string;
+  conversationKey: string;
+};
+
 export type RecordExecutionCancellationAttemptInput = {
   cancellationRequestId: string;
   executionId: string;
@@ -111,6 +116,47 @@ export async function getExecutionCancellationControl(
     externalRunId: cancellationRequest.execution.externalRunId,
     externalUrl: cancellationRequest.execution.externalUrl,
     status: cancellationRequest.status,
+  };
+}
+
+export async function getExecutionConversationReleaseControl(
+  prisma: PrismaClient,
+  outboxEventId: string,
+): Promise<ExecutionConversationReleaseControl | null> {
+  const outboxEvent = await prisma.outboxEvent.findFirst({
+    where: {
+      id: outboxEventId,
+      kind: OutboxEventKind.EXECUTION_CONVERSATION_RELEASE,
+    },
+    select: { jobId: true, queueSequence: true },
+  });
+  if (!outboxEvent) return null;
+
+  const attempt = await prisma.jobAttempt.findFirst({
+    where: {
+      jobId: outboxEvent.jobId,
+      number: outboxEvent.queueSequence,
+      execution: {
+        status: {
+          in: [
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.TIMED_OUT,
+          ],
+        },
+      },
+    },
+    select: {
+      execution: { select: { id: true } },
+      job: { select: { conversationKey: true } },
+    },
+  });
+  if (!attempt?.execution) return null;
+
+  return {
+    executionId: attempt.execution.id,
+    conversationKey: attempt.job.conversationKey,
   };
 }
 
@@ -330,6 +376,14 @@ export async function recordExternalExecutionTerminalStatus(
           input.status === ExecutionStatus.CANCELLED
             ? ExecutionCancellationRequestStatus.COMPLETED
             : ExecutionCancellationRequestStatus.SUPERSEDED,
+      },
+    });
+    await transaction.outboxEvent.create({
+      data: {
+        jobId: attempt.jobId,
+        kind: OutboxEventKind.EXECUTION_CONVERSATION_RELEASE,
+        queueSequence: attempt.number,
+        dedupeKey: `execution:${execution.id}:conversation-release`,
       },
     });
     return true;

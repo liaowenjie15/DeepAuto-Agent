@@ -1,4 +1,10 @@
-import type { InboundInvocation } from '@deepauto/contracts';
+import {
+  allowsExecutionCapabilitySource,
+  createExecutionCapabilitySnapshot,
+  type InboundInvocation,
+  resolveExecutionCapability,
+  validateExecutionCapabilityRegistry,
+} from '@deepauto/contracts';
 import {
   type AuthorizedInvocation,
   authorizeInboundInvocation,
@@ -49,6 +55,15 @@ export async function dispatchInboundInvocation(
   admission?: InboundInvocationAdmission,
 ): Promise<DispatchResult> {
   if (!invocation) return { status: 'ignored' };
+
+  const capability = resolveExecutionCapability();
+  validateExecutionCapabilityRegistry([capability]);
+  if (
+    !allowsExecutionCapabilitySource(capability, invocation.source) ||
+    !invocation.repositoryId
+  ) {
+    return { status: 'unauthorized' };
+  }
 
   const authorized = await authorizeInboundInvocation(prisma, invocation);
   if (!authorized) return { status: 'unauthorized' };
@@ -111,6 +126,8 @@ export async function dispatchInboundInvocation(
     ...authorized,
     receivedAt: new Date(authorized.receivedAt),
     idempotencyKey: invocation.idempotencyKey,
+    repositoryId: invocation.repositoryId,
+    capabilitySnapshot: createExecutionCapabilitySnapshot(capability),
   });
   return {
     status: 'accepted',
