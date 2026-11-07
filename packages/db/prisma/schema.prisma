@@ -144,6 +144,7 @@ model WorkspaceMember {
   workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   larkConnections LarkUserConnection[]
   larkOAuthStates LarkOAuthState[]
+  larkWriteConfirmations LarkWriteConfirmation[]
 
   @@unique([id, workspaceId])
   @@unique([workspaceId, larkOpenId])
@@ -183,6 +184,26 @@ model LarkUserConnection {
 
   @@unique([workspaceId, actorId, appId, tenantKey])
   @@index([workspaceId, tenantKey])
+}
+
+model LarkWriteConfirmation {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  actorId         String
+  appId           String
+  tenantKey       String
+  conversationKey String
+  action          String
+  targetHash      String
+  payloadHash     String
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  invalidatedAt   DateTime?
+  createdAt       DateTime @default(now())
+  member          WorkspaceMember @relation(fields: [actorId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@index([workspaceId, actorId, conversationKey, expiresAt])
+  @@index([expiresAt])
 }
 
 model WorkspaceRepository {

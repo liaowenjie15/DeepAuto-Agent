@@ -38,16 +38,19 @@ export function createLarkOAuthProvider(configuration: {
   ): Promise<LarkOAuthTokens> {
     let response: Response;
     try {
-      response = await request('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({
-          ...input,
-          client_id: configuration.appId,
-          client_secret: configuration.appSecret,
-        }),
-        signal: AbortSignal.timeout(10_000),
-      });
+      response = await request(
+        'https://open.feishu.cn/open-apis/authen/v2/oauth/token',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({
+            ...input,
+            client_id: configuration.appId,
+            client_secret: configuration.appSecret,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
     } catch {
       throw new Error('Lark OAuth token endpoint is unavailable');
     }
@@ -93,7 +96,10 @@ export function createLarkOAuthProvider(configuration: {
       });
     },
     refresh(refreshToken: string): Promise<LarkOAuthTokens> {
-      return tokenRequest({ grant_type: 'refresh_token', refresh_token: refreshToken });
+      return tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      });
     },
     async getIdentity(accessToken: string) {
       let response: Response;
@@ -116,7 +122,8 @@ export function createLarkOAuthProvider(configuration: {
         throw new Error('Lark OAuth identity response is invalid');
       }
       const parsed = userInfoResponseSchema.safeParse(payload);
-      if (!parsed.success) throw new Error('Lark OAuth identity request failed');
+      if (!parsed.success)
+        throw new Error('Lark OAuth identity request failed');
       return {
         openId: parsed.data.data.open_id,
         tenantKey: parsed.data.data.tenant_key,

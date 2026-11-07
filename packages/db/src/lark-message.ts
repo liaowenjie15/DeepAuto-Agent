@@ -86,8 +86,7 @@ export async function createOrGetLarkMessage(
       existing.invocation.workspaceId !== input.authorized.workspaceId ||
       existing.invocation.actorId !== input.authorized.actorId ||
       existing.invocation.sourceEventId !== input.authorized.sourceEventId ||
-      existing.invocation.conversationKey !==
-        input.authorized.conversationKey
+      existing.invocation.conversationKey !== input.authorized.conversationKey
     ) {
       throw new Error('Lark message identity conflict');
     }
@@ -111,7 +110,8 @@ export async function claimLarkDelivery(
     },
     data: {
       [input.kind]: 'CLAIMED',
-      [input.kind === 'acknowledgement' ? 'acknowledgementAt' : 'finalReplyAt']: new Date(),
+      [input.kind === 'acknowledgement' ? 'acknowledgementAt' : 'finalReplyAt']:
+        new Date(),
     },
   });
   if (claimed.count !== 1) return null;
@@ -218,7 +218,12 @@ export async function claimNextLarkMessage(
       },
     },
   });
-  if (!candidate || candidate.appId !== input.appId || candidate.tenantKey !== input.tenantKey) return null;
+  if (
+    !candidate ||
+    candidate.appId !== input.appId ||
+    candidate.tenantKey !== input.tenantKey
+  )
+    return null;
 
   const claimed = await prisma.larkMessage.updateMany({
     where: {
@@ -268,7 +273,12 @@ export async function claimNextLarkMessage(
 
 export async function markStaleLarkMessagesUnknown(
   prisma: PrismaClient,
-  input: { appId: string; tenantKey: string; workspaceId: string; before: Date },
+  input: {
+    appId: string;
+    tenantKey: string;
+    workspaceId: string;
+    before: Date;
+  },
 ): Promise<number> {
   const result = await prisma.larkMessage.updateMany({
     where: {
@@ -285,20 +295,77 @@ export async function markStaleLarkMessagesUnknown(
 
 export async function markStaleLarkDeliveriesUnknown(
   prisma: PrismaClient,
-  input: { appId: string; tenantKey: string; workspaceId: string; before: Date },
+  input: {
+    appId: string;
+    tenantKey: string;
+    workspaceId: string;
+    before: Date;
+  },
 ): Promise<void> {
   const scope = {
     appId: input.appId,
     tenantKey: input.tenantKey,
     invocation: { workspaceId: input.workspaceId },
   };
-  await prisma.larkMessage.updateMany({
-    where: { ...scope, acknowledgement: 'CLAIMED', acknowledgementAt: { lt: input.before } },
-    data: { acknowledgement: 'UNKNOWN' },
-  });
-  await prisma.larkMessage.updateMany({
-    where: { ...scope, finalReply: 'CLAIMED', finalReplyAt: { lt: input.before } },
-    data: { finalReply: 'UNKNOWN' },
+
+  await prisma.$transaction(async (transaction) => {
+    const acknowledgements = await transaction.larkMessage.findMany({
+      where: {
+        ...scope,
+        acknowledgement: 'CLAIMED',
+        acknowledgementAt: { lt: input.before },
+      },
+      select: { id: true, invocationId: true },
+      take: 100,
+    });
+    for (const acknowledgement of acknowledgements) {
+      const updated = await transaction.larkMessage.updateMany({
+        where: {
+          id: acknowledgement.id,
+          acknowledgement: 'CLAIMED',
+          acknowledgementAt: { lt: input.before },
+        },
+        data: { acknowledgement: 'UNKNOWN' },
+      });
+      if (updated.count !== 1) continue;
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: null,
+          action: 'lark.delivery_acknowledgement_unknown',
+          metadata: { invocationId: acknowledgement.invocationId },
+        },
+      });
+    }
+
+    const finalReplies = await transaction.larkMessage.findMany({
+      where: {
+        ...scope,
+        finalReply: 'CLAIMED',
+        finalReplyAt: { lt: input.before },
+      },
+      select: { id: true, invocationId: true },
+      take: 100,
+    });
+    for (const finalReply of finalReplies) {
+      const updated = await transaction.larkMessage.updateMany({
+        where: {
+          id: finalReply.id,
+          finalReply: 'CLAIMED',
+          finalReplyAt: { lt: input.before },
+        },
+        data: { finalReply: 'UNKNOWN' },
+      });
+      if (updated.count !== 1) continue;
+      await transaction.auditEvent.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorId: null,
+          action: 'lark.delivery_final_reply_unknown',
+          metadata: { invocationId: finalReply.invocationId },
+        },
+      });
+    }
   });
 }
 
@@ -320,8 +387,7 @@ export async function finishLarkProcessing(
     data: {
       processingState: input.state,
       finalText: input.finalText,
-      processingFinishedAt:
-        input.state === 'WAITING_PR' ? null : new Date(),
+      processingFinishedAt: input.state === 'WAITING_PR' ? null : new Date(),
     },
   });
   if (updated.count !== 1) throw new Error('Lark processing claim was lost');

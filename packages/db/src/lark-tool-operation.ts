@@ -24,7 +24,11 @@ export async function claimLarkToolWrite(
   const targetHash = digest(input.target);
   const operationKey = digest(input.invocationId);
   const snapshotEncrypted = input.cipher.encrypt(
-    JSON.stringify({ action: input.action, target: input.target, payload: input.payload }),
+    JSON.stringify({
+      action: input.action,
+      target: input.target,
+      payload: input.payload,
+    }),
     `lark-operation:${input.workspaceId}:${input.invocationId}`,
   );
   try {
@@ -82,7 +86,12 @@ export async function claimLarkToolWrite(
       return { operationId: operation.id };
     });
   } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'P2002'
+    ) {
       return null;
     }
     throw error;
@@ -118,12 +127,13 @@ export async function finishLarkToolWrite(
       data: {
         state: input.succeeded ? 'SUCCEEDED' : 'UNKNOWN',
         finishedAt: new Date(),
-        providerResultEncrypted: input.result === undefined
-          ? undefined
-          : input.cipher.encrypt(
-              JSON.stringify(input.result),
-              `lark-operation-result:${input.workspaceId}:${operation.invocationId}`,
-            ),
+        providerResultEncrypted:
+          input.result === undefined
+            ? undefined
+            : input.cipher.encrypt(
+                JSON.stringify(input.result),
+                `lark-operation-result:${input.workspaceId}:${operation.invocationId}`,
+              ),
       },
     });
     await transaction.auditEvent.create({

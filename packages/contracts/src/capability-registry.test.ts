@@ -12,7 +12,7 @@ test('registers the single supported PR-only execution capability', () => {
   expect(capability.id).toBe('repository.change-pr.v1');
   expect(capability.writePolicy).toBe('pull-request-only');
   expect(allowsExecutionCapabilitySource(capability, 'github')).toBe(true);
-  expect(allowsExecutionCapabilitySource(capability, 'feishu')).toBe(false);
+  expect(allowsExecutionCapabilitySource(capability, 'feishu')).toBe(true);
 });
 
 test('rejects duplicate execution capability registrations', () => {

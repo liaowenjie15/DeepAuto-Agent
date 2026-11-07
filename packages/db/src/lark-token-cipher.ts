@@ -8,7 +8,9 @@ export type LarkTokenCipher = {
 export function createLarkTokenCipher(base64Key: string): LarkTokenCipher {
   const key = Buffer.from(base64Key, 'base64');
   if (key.length !== 32 || key.toString('base64') !== base64Key) {
-    throw new Error('Lark token encryption key must be 32 base64-encoded bytes');
+    throw new Error(
+      'Lark token encryption key must be 32 base64-encoded bytes',
+    );
   }
 
   return {

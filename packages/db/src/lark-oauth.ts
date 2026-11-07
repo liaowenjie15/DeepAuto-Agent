@@ -5,6 +5,7 @@ import type { LarkTokenCipher } from './lark-token-cipher';
 const allowedUserScopes = new Set([
   'offline_access',
   'docx:document:readonly',
+  'wiki:wiki:readonly',
   'docx:document:create',
   'docx:document:write_only',
   'bitable:app:readonly',
@@ -23,7 +24,7 @@ const allowedUserScopes = new Set([
   'docs:permission.member:delete',
 ]);
 
-export type LarkOAuthState = {
+export type LarkOAuthGrantState = {
   workspaceId: string;
   actorId: string;
   tenantKey: string;
@@ -99,7 +100,7 @@ export async function consumeLarkOAuthState(
   prisma: PrismaClient,
   state: string,
   tenantKey: string,
-): Promise<LarkOAuthState | null> {
+): Promise<LarkOAuthGrantState | null> {
   const hash = stateHash(state);
   const usedAt = new Date();
   const claimed = await prisma.larkOAuthState.updateMany({
@@ -129,7 +130,7 @@ export async function consumeLarkOAuthState(
 export async function saveLarkUserConnection(
   prisma: PrismaClient,
   input: {
-    state: LarkOAuthState;
+    state: LarkOAuthGrantState;
     appId: string;
     openId: string;
     tenantKey: string;

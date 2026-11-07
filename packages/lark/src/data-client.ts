@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-const apiResponse = z.object({ code: z.number(), data: z.unknown().optional() });
+const apiResponse = z.object({
+  code: z.number(),
+  data: z.unknown().optional(),
+});
 const tenantTokenResponse = z.object({
   code: z.literal(0),
   tenant_access_token: z.string().min(1),
@@ -12,14 +15,32 @@ const fieldValues = z.record(z.string().min(1).max(128), z.unknown());
 export type LarkDataOperation =
   | { action: 'doc.read'; documentId: string }
   | { action: 'doc.append'; documentId: string; text: string }
+  | { action: 'wiki.resolve'; nodeToken: string }
   | { action: 'base.list'; appToken: string; tableId: string }
-  | { action: 'base.create'; appToken: string; tableId: string; fields: Record<string, unknown> }
-  | { action: 'base.update'; appToken: string; tableId: string; recordId: string; fields: Record<string, unknown> }
-  | { action: 'base.delete'; appToken: string; tableId: string; recordId: string };
+  | {
+      action: 'base.create';
+      appToken: string;
+      tableId: string;
+      fields: Record<string, unknown>;
+    }
+  | {
+      action: 'base.update';
+      appToken: string;
+      tableId: string;
+      recordId: string;
+      fields: Record<string, unknown>;
+    }
+  | {
+      action: 'base.delete';
+      appToken: string;
+      tableId: string;
+      recordId: string;
+    };
 
 export const larkDataScope: Record<LarkDataOperation['action'], string> = {
   'doc.read': 'docx:document:readonly',
   'doc.append': 'docx:document:write_only',
+  'wiki.resolve': 'wiki:wiki:readonly',
   'base.list': 'bitable:app:readonly',
   'base.create': 'base:record:create',
   'base.update': 'base:record:update',
@@ -27,9 +48,9 @@ export const larkDataScope: Record<LarkDataOperation['action'], string> = {
 };
 
 export function larkDataTarget(operation: LarkDataOperation): string {
-  return 'documentId' in operation
-    ? operation.documentId
-    : `${operation.appToken}/${operation.tableId}${'recordId' in operation ? `/${operation.recordId}` : ''}`;
+  if ('documentId' in operation) return operation.documentId;
+  if ('nodeToken' in operation) return operation.nodeToken;
+  return `${operation.appToken}/${operation.tableId}${'recordId' in operation ? `/${operation.recordId}` : ''}`;
 }
 
 export function requestForLarkDataOperation(operation: LarkDataOperation): {
@@ -37,6 +58,13 @@ export function requestForLarkDataOperation(operation: LarkDataOperation): {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
 } {
+  if ('nodeToken' in operation) {
+    const nodeToken = tokenPart.parse(operation.nodeToken);
+    return {
+      path: `/wiki/v2/spaces/get_node?token=${encodeURIComponent(nodeToken)}`,
+      method: 'GET',
+    };
+  }
   if ('documentId' in operation) {
     const id = tokenPart.parse(operation.documentId);
     if (operation.action === 'doc.read') {
@@ -47,7 +75,9 @@ export function requestForLarkDataOperation(operation: LarkDataOperation): {
       path: `/docx/v1/documents/${id}/blocks/${id}/children`,
       method: 'POST',
       body: {
-        children: [{ block_type: 2, text: { elements: [{ text_run: { content } }] } }],
+        children: [
+          { block_type: 2, text: { elements: [{ text_run: { content } }] } },
+        ],
       },
     };
   }
@@ -59,7 +89,8 @@ export function requestForLarkDataOperation(operation: LarkDataOperation): {
   }
   if (operation.action === 'base.create') {
     const fields = fieldValues.parse(operation.fields);
-    if (JSON.stringify(fields).length > 20_000) throw new Error('Lark record is too large');
+    if (JSON.stringify(fields).length > 20_000)
+      throw new Error('Lark record is too large');
     return { path: basePath, method: 'POST', body: { fields } };
   }
   const record = tokenPart.parse(operation.recordId);
@@ -67,12 +98,27 @@ export function requestForLarkDataOperation(operation: LarkDataOperation): {
     return { path: `${basePath}/${record}`, method: 'DELETE' };
   }
   const fields = fieldValues.parse(operation.fields);
-  if (JSON.stringify(fields).length > 20_000) throw new Error('Lark record is too large');
+  if (JSON.stringify(fields).length > 20_000)
+    throw new Error('Lark record is too large');
   return {
     path: `${basePath}/${record}`,
     method: 'PUT',
     body: { fields },
   };
+}
+
+const wikiDocxResolution = z.object({
+  node: z.object({
+    obj_type: z.literal('docx'),
+    obj_token: tokenPart,
+  }),
+});
+
+export function resolvedWikiDocxDocumentId(
+  result: unknown,
+): string | undefined {
+  const parsed = wikiDocxResolution.safeParse(result);
+  return parsed.success ? parsed.data.node.obj_token : undefined;
 }
 
 export function createLarkDataClient(configuration: {
@@ -87,12 +133,18 @@ export function createLarkDataClient(configuration: {
     if (botToken && botToken.expiresAt > Date.now() + 60_000) {
       return botToken.value;
     }
-    const response = await request('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ app_id: configuration.appId, app_secret: configuration.appSecret }),
-      signal: AbortSignal.timeout(10_000),
-    });
+    const response = await request(
+      'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          app_id: configuration.appId,
+          app_secret: configuration.appSecret,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
     if (!response.ok) throw new Error('Lark bot authorization failed');
     const parsed = tenantTokenResponse.safeParse(await response.json());
     if (!parsed.success) throw new Error('Lark bot authorization failed');
@@ -104,21 +156,29 @@ export function createLarkDataClient(configuration: {
   }
 
   return {
-    async execute(operation: LarkDataOperation, identity: 'bot' | { userAccessToken: string }): Promise<unknown> {
+    async execute(
+      operation: LarkDataOperation,
+      identity: 'bot' | { userAccessToken: string },
+    ): Promise<unknown> {
       const { path, method, body } = requestForLarkDataOperation(operation);
-      const token = identity === 'bot' ? await botAccessToken() : identity.userAccessToken;
-      const response = await request(`https://open.feishu.cn/open-apis${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${token}`,
-          ...(body ? { 'content-type': 'application/json' } : {}),
+      const token =
+        identity === 'bot' ? await botAccessToken() : identity.userAccessToken;
+      const response = await request(
+        `https://open.feishu.cn/open-apis${path}`,
+        {
+          method,
+          headers: {
+            authorization: `Bearer ${token}`,
+            ...(body ? { 'content-type': 'application/json' } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(10_000),
         },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(10_000),
-      });
+      );
       if (!response.ok) throw new Error('Lark data request failed');
       const text = await response.text();
-      if (text.length > 100_000) throw new Error('Lark data response is too large');
+      if (text.length > 100_000)
+        throw new Error('Lark data response is too large');
       const parsed = apiResponse.safeParse(JSON.parse(text));
       if (!parsed.success || parsed.data.code !== 0) {
         throw new Error('Lark data operation was rejected');

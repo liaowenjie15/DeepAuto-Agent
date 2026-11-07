@@ -5,8 +5,8 @@ import {
 import {
   acceptExecutionCallbackByExecutionId,
   bindExecutionToExternalRun,
-  consumeLarkOAuthState,
   consumeExecutionBootstrapCapability,
+  consumeLarkOAuthState,
   type ExecutionBootstrap,
   type ExecutionCallbackByExecutionIdInput,
   getActiveExecutionBootstrap,
@@ -14,7 +14,6 @@ import {
   type PrismaClient,
   saveLarkUserConnection,
 } from '@deepauto/db';
-import type { createLarkOAuthProvider } from '@deepauto/lark';
 import {
   deepAutoReceiptMarker,
   type GitHubActionsOidcClaims,
@@ -30,6 +29,7 @@ import {
   verifyGitHubActionsOidcToken,
   verifyGitHubWebhookSignature,
 } from '@deepauto/github';
+import type { createLarkOAuthProvider } from '@deepauto/lark';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
@@ -191,7 +191,10 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
     const code = context.req.query('code');
     const state = context.req.query('state');
     if (!code || code.length > 256 || !state || state.length > 128) {
-      return context.text('Authorization failed. Return to Feishu and retry.', 400);
+      return context.text(
+        'Authorization failed. Return to Feishu and retry.',
+        400,
+      );
     }
     const oauth = configuration.larkOAuth;
     try {
@@ -201,7 +204,10 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
         oauth.tenantKey,
       );
       if (!claimed) {
-        return context.text('Authorization failed. Return to Feishu and retry.', 400);
+        return context.text(
+          'Authorization failed. Return to Feishu and retry.',
+          400,
+        );
       }
       const tokens = await oauth.provider.exchangeCode(code);
       const identity = await oauth.provider.getIdentity(tokens.accessToken);
@@ -214,11 +220,17 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
         cipher: oauth.cipher,
       });
       if (!saved) {
-        return context.text('Authorization failed. Return to Feishu and retry.', 400);
+        return context.text(
+          'Authorization failed. Return to Feishu and retry.',
+          400,
+        );
       }
       return context.text('Authorization completed. Return to Feishu.');
     } catch {
-      return context.text('Authorization failed. Return to Feishu and retry.', 400);
+      return context.text(
+        'Authorization failed. Return to Feishu and retry.',
+        400,
+      );
     }
   });
 
