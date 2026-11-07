@@ -1,13 +1,25 @@
 import { existsSync } from 'node:fs';
-import { createPrismaClient, type PrismaClient } from '@deepauto/db';
+import {
+  createLarkTokenCipher,
+  createPrismaClient,
+  createRedisConnection,
+  type PrismaClient,
+} from '@deepauto/db';
 import {
   createGitHubAppIssueCommentPublisher,
   createGitHubAppPullRequestInspector,
   type GitHubAppCredentials,
 } from '@deepauto/github';
+import { createFeishuClient, createLarkOAuthProvider } from '@deepauto/lark';
 import { config as loadEnvironmentFile } from 'dotenv';
 import { z } from 'zod';
 import { createGatewayApp, type GatewayConfiguration } from './app';
+import { createLarkIngress } from './lark-ingress';
+import {
+  type LarkIngressLeader,
+  type LarkIngressLeaseStore,
+  startLarkIngressLeader,
+} from './lark-ingress-leader';
 
 const optionalText = z.preprocess(
   (value) =>
@@ -15,8 +27,15 @@ const optionalText = z.preprocess(
   z.string().trim().min(1).optional(),
 );
 
+const optionalUrl = z.preprocess(
+  (value) =>
+    typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.url().optional(),
+);
+
 const gatewayConfigurationSchema = z.object({
   DATABASE_URL: z.url(),
+  REDIS_URL: optionalUrl,
   GITHUB_WEBHOOK_SECRET: z.string().min(32),
   GITHUB_WORKSPACE_ID: z.string().trim().min(1),
   GITHUB_BOT_MENTION: z.string().trim().min(2),
@@ -27,6 +46,14 @@ const gatewayConfigurationSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: optionalText.transform((value) =>
     value?.replace(/\\n/g, '\n'),
   ),
+  LARK_APP_ID: optionalText,
+  LARK_APP_SECRET: optionalText,
+  LARK_TENANT_KEY: optionalText,
+  LARK_BOT_OPEN_ID: optionalText,
+  LARK_WORKSPACE_ID: optionalText,
+  LARK_ALLOWED_GROUP_CHAT_IDS: optionalText,
+  LARK_OAUTH_REDIRECT_URI: optionalText,
+  LARK_TOKEN_ENCRYPTION_KEY: optionalText,
   DEEPAUTO_GATEWAY_HOST: optionalText.default('127.0.0.1'),
   DEEPAUTO_GATEWAY_PORT: z.coerce
     .number()
@@ -56,6 +83,15 @@ export type GatewayRuntimeConfiguration = {
   host: string;
   port: number;
   appConfiguration: GatewayConfiguration;
+  lark?: {
+    appId: string;
+    appSecret: string;
+    tenantKey: string;
+    workspaceId: string;
+    botOpenId: string;
+    allowedGroupChatIds: string[];
+    redisUrl: string;
+  };
 };
 
 export type GatewayRuntime = {
@@ -160,6 +196,32 @@ export function parseGatewayConfiguration(
     const githubAppCredentials = parseGitHubAppCredentials(parsed.data);
     const githubActions = parseActionsConfiguration(parsed.data);
     const codexProxy = parseCodexProxyConfiguration(parsed.data);
+    const lark = requireCompleteGroup({
+      appId: parsed.data.LARK_APP_ID,
+      appSecret: parsed.data.LARK_APP_SECRET,
+      tenantKey: parsed.data.LARK_TENANT_KEY,
+      workspaceId: parsed.data.LARK_WORKSPACE_ID,
+      botOpenId: parsed.data.LARK_BOT_OPEN_ID,
+      redirectUri: parsed.data.LARK_OAUTH_REDIRECT_URI,
+      encryptionKey: parsed.data.LARK_TOKEN_ENCRYPTION_KEY,
+    });
+    const redisUrl = parsed.data.REDIS_URL;
+    if (lark && !redisUrl) {
+      throw new Error('Gateway configuration is invalid');
+    }
+    if (lark) {
+      const redirect = new URL(lark.redirectUri);
+      if (
+        redirect.pathname !== '/callback' ||
+        Number(redirect.port || (redirect.protocol === 'https:' ? 443 : 80)) !==
+          parsed.data.DEEPAUTO_GATEWAY_PORT ||
+        !['https:', 'http:'].includes(redirect.protocol) ||
+        (redirect.protocol === 'http:' &&
+          !['localhost', '127.0.0.1'].includes(redirect.hostname))
+      ) {
+        throw new Error('Gateway configuration is invalid');
+      }
+    }
     const pilotAdmission = pilotConfiguration(
       parsed.data,
       githubAppCredentials,
@@ -169,6 +231,23 @@ export function parseGatewayConfiguration(
     return {
       host: parsed.data.DEEPAUTO_GATEWAY_HOST,
       port: parsed.data.DEEPAUTO_GATEWAY_PORT,
+      lark:
+        lark && redisUrl
+          ? {
+              appId: lark.appId,
+              appSecret: lark.appSecret,
+              tenantKey: lark.tenantKey,
+              workspaceId: lark.workspaceId,
+              botOpenId: lark.botOpenId,
+              allowedGroupChatIds: (
+                parsed.data.LARK_ALLOWED_GROUP_CHAT_IDS ?? ''
+              )
+                .split(',')
+                .map((value) => value.trim())
+                .filter(Boolean),
+              redisUrl,
+            }
+          : undefined,
       appConfiguration: {
         prisma: createPrismaClient(parsed.data.DATABASE_URL),
         githubWebhookSecret: parsed.data.GITHUB_WEBHOOK_SECRET,
@@ -184,6 +263,18 @@ export function parseGatewayConfiguration(
           : undefined,
         codexProxy,
         pilotAdmission,
+        larkOAuth: lark
+          ? {
+              appId: lark.appId,
+              tenantKey: lark.tenantKey,
+              provider: createLarkOAuthProvider({
+                appId: lark.appId,
+                appSecret: lark.appSecret,
+                redirectUri: lark.redirectUri,
+              }),
+              cipher: createLarkTokenCipher(lark.encryptionKey),
+            }
+          : undefined,
       },
     };
   } catch {
@@ -193,11 +284,49 @@ export function parseGatewayConfiguration(
 
 export async function startGatewayRuntime(
   configuration: GatewayRuntimeConfiguration,
-  dependencies: { prisma?: PrismaClient } = {},
+  dependencies: {
+    prisma?: PrismaClient;
+    larkIngressLeaseStore?: LarkIngressLeaseStore;
+  } = {},
 ): Promise<GatewayRuntime> {
   const prisma = dependencies.prisma ?? configuration.appConfiguration.prisma;
+  const larkConfiguration = configuration.lark;
   await prisma.$connect();
   const app = createGatewayApp({ ...configuration.appConfiguration, prisma });
+  const ownsLarkLeaseStore = Boolean(
+    larkConfiguration && !dependencies.larkIngressLeaseStore,
+  );
+  const larkLeaseStore = larkConfiguration
+    ? (dependencies.larkIngressLeaseStore ??
+      createRedisConnection(larkConfiguration.redisUrl))
+    : undefined;
+  let larkLeader: LarkIngressLeader | undefined;
+  try {
+    larkLeader =
+      larkConfiguration && larkLeaseStore
+        ? await startLarkIngressLeader({
+            store: larkLeaseStore,
+            appId: larkConfiguration.appId,
+            tenantKey: larkConfiguration.tenantKey,
+            workspaceId: larkConfiguration.workspaceId,
+            createIngress: (canAccept) =>
+              createLarkIngress(
+                prisma,
+                {
+                  ...larkConfiguration,
+                  client: createFeishuClient(larkConfiguration),
+                },
+                undefined,
+                canAccept,
+              ),
+          })
+        : undefined;
+  } catch {
+    await larkLeader?.close();
+    if (ownsLarkLeaseStore) await larkLeaseStore?.quit();
+    await prisma.$disconnect();
+    throw new Error('Lark message ingress failed to start');
+  }
   let closed = false;
 
   return {
@@ -205,6 +334,8 @@ export async function startGatewayRuntime(
     async close() {
       if (closed) return;
       closed = true;
+      await larkLeader?.close();
+      if (ownsLarkLeaseStore) await larkLeaseStore?.quit();
       await prisma.$disconnect();
     },
   };

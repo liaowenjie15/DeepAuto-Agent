@@ -6,10 +6,13 @@ import {
   acceptExecutionCallbackByExecutionId,
   bindExecutionToExternalRun,
   consumeExecutionBootstrapCapability,
+  consumeLarkOAuthState,
   type ExecutionBootstrap,
   type ExecutionCallbackByExecutionIdInput,
   getActiveExecutionBootstrap,
+  type LarkTokenCipher,
   type PrismaClient,
+  saveLarkUserConnection,
 } from '@deepauto/db';
 import {
   deepAutoReceiptMarker,
@@ -26,6 +29,7 @@ import {
   verifyGitHubActionsOidcToken,
   verifyGitHubWebhookSignature,
 } from '@deepauto/github';
+import type { createLarkOAuthProvider } from '@deepauto/lark';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
@@ -127,6 +131,12 @@ export type GatewayConfiguration = {
   pilotAdmission?: PilotAdmissionProvider;
   executionService?: GatewayExecutionService;
   now?: () => Date;
+  larkOAuth?: {
+    tenantKey: string;
+    appId: string;
+    provider: ReturnType<typeof createLarkOAuthProvider>;
+    cipher: LarkTokenCipher;
+  };
 };
 
 function bearerToken(value: string | undefined): string | null {
@@ -175,6 +185,54 @@ export function createGatewayApp(configuration: GatewayConfiguration) {
     : undefined;
 
   app.get('/healthz', (context) => context.json({ status: 'ok' }));
+
+  app.get('/callback', async (context) => {
+    if (!configuration.larkOAuth) return context.notFound();
+    const code = context.req.query('code');
+    const state = context.req.query('state');
+    if (!code || code.length > 256 || !state || state.length > 128) {
+      return context.text(
+        'Authorization failed. Return to Feishu and retry.',
+        400,
+      );
+    }
+    const oauth = configuration.larkOAuth;
+    try {
+      const claimed = await consumeLarkOAuthState(
+        configuration.prisma,
+        state,
+        oauth.tenantKey,
+      );
+      if (!claimed) {
+        return context.text(
+          'Authorization failed. Return to Feishu and retry.',
+          400,
+        );
+      }
+      const tokens = await oauth.provider.exchangeCode(code);
+      const identity = await oauth.provider.getIdentity(tokens.accessToken);
+      const saved = await saveLarkUserConnection(configuration.prisma, {
+        state: claimed,
+        appId: oauth.appId,
+        openId: identity.openId,
+        tenantKey: identity.tenantKey,
+        tokens,
+        cipher: oauth.cipher,
+      });
+      if (!saved) {
+        return context.text(
+          'Authorization failed. Return to Feishu and retry.',
+          400,
+        );
+      }
+      return context.text('Authorization completed. Return to Feishu.');
+    } catch {
+      return context.text(
+        'Authorization failed. Return to Feishu and retry.',
+        400,
+      );
+    }
+  });
 
   app.post('/github/webhooks', async (context) => {
     const rawBody = await context.req.text();

@@ -1,4 +1,7 @@
-import { executionCapabilitySnapshotSchema } from '@deepauto/contracts';
+import {
+  allowsExecutionCapabilitySource,
+  executionCapabilitySnapshotSchema,
+} from '@deepauto/contracts';
 import {
   acceptExecutionCallback,
   beginJobAttempt,
@@ -84,6 +87,7 @@ export type ExecuteQueuedGitHubActionsJobDependencies = Omit<
     GitHubActionsExecutor,
     'start' | 'getStatus' | 'isConfiguredForRepository'
   >;
+  larkTrust?: { appId: string; tenantKey: string; workspaceId: string };
 };
 
 export function toExecutionStatus(
@@ -247,8 +251,17 @@ export async function executeQueuedGitHubActionsJob(
       capabilityPolicy: true,
       invocation: {
         select: {
+          source: true,
+          actorId: true,
           repositoryId: true,
           workspaceId: true,
+          larkMessage: {
+            select: {
+              appId: true,
+              tenantKey: true,
+              senderOpenId: true,
+            },
+          },
         },
       },
     },
@@ -319,6 +332,53 @@ export async function executeQueuedGitHubActionsJob(
         'The execution capability policy snapshot is invalid.',
         dependencies,
       );
+    }
+    if (
+      !allowsExecutionCapabilitySource(
+        parsedCapabilitySnapshot.data.policy,
+        job.invocation.source === 'FEISHU' ? 'feishu' : 'github',
+      )
+    ) {
+      return rejectQueuedGitHubActionsJob(
+        input.jobId,
+        'The execution capability does not allow this source.',
+        dependencies,
+      );
+    }
+    if (job.invocation.source === 'FEISHU') {
+      const trust = dependencies.larkTrust;
+      const anchor = job.invocation.larkMessage;
+      if (
+        !trust ||
+        !anchor ||
+        trust.workspaceId !== job.invocation.workspaceId ||
+        trust.appId !== anchor.appId ||
+        trust.tenantKey !== anchor.tenantKey
+      ) {
+        return rejectQueuedGitHubActionsJob(
+          input.jobId,
+          'The Feishu invocation identity is unavailable.',
+          dependencies,
+        );
+      }
+      const member = await dependencies.prisma.workspaceMember.findFirst({
+        where: {
+          id: job.invocation.actorId,
+          workspaceId: trust.workspaceId,
+          larkOpenId: anchor.senderOpenId,
+          githubUserId: { not: null },
+          role: { in: ['OPERATOR', 'ADMIN'] },
+          active: true,
+        },
+        select: { id: true },
+      });
+      if (!member) {
+        return rejectQueuedGitHubActionsJob(
+          input.jobId,
+          'The Feishu member is not authorized for code execution.',
+          dependencies,
+        );
+      }
     }
 
     const attempt = await beginJobAttempt(dependencies.prisma, input.jobId);

@@ -15,7 +15,7 @@
     "generate": "prisma generate",
     "migrate:deploy": "prisma migrate deploy",
     "build": "bun run generate && rm -rf dist && tsc -p tsconfig.build.json",
-    "lint": "biome check src/index.ts src/authorization.ts src/credential-claim.ts src/execution-control.ts src/execution-service.ts src/execution-user-control.ts src/invocation-service.ts src/job-lifecycle.ts src/job-queue.ts src/test-environment.ts src/test-environment.test.ts package.json tsconfig.json tsconfig.build.json prisma.config.ts",
+    "lint": "biome check src/index.ts src/authorization.ts src/credential-claim.ts src/execution-control.ts src/execution-service.ts src/execution-user-control.ts src/invocation-service.ts src/job-lifecycle.ts src/job-queue.ts src/lark-message.ts src/lark-message.test.ts src/lark-oauth.ts src/lark-pull-request.ts src/lark-token-cipher.ts src/lark-tool-operation.ts src/lark-write-confirmation.ts src/lark-write-confirmation.test.ts src/test-environment.ts src/test-environment.test.ts package.json tsconfig.json tsconfig.build.json prisma.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:unit": "bun test src"
   },

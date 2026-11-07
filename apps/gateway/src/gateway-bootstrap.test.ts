@@ -72,3 +72,34 @@ test('requires the immutable repository ID in the GitHub Actions OIDC policy', (
     },
   );
 });
+
+test('requires Redis when Feishu message ingress is configured', () => {
+  expect(() =>
+    parseGatewayConfiguration({
+      ...baseEnvironment,
+      LARK_APP_ID: 'cli_test_app',
+      LARK_APP_SECRET: 'test-secret',
+      LARK_TENANT_KEY: 'tenant_test',
+      LARK_BOT_OPEN_ID: 'ou_bot',
+      LARK_WORKSPACE_ID: 'workspace-1',
+      LARK_OAUTH_REDIRECT_URI: 'https://example.test/callback',
+      LARK_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32).toString('base64'),
+    }),
+  ).toThrow('Gateway configuration is invalid');
+});
+
+test('binds Feishu ingress to a validated Redis lease URL', () => {
+  const configuration = parseGatewayConfiguration({
+    ...baseEnvironment,
+    REDIS_URL: 'redis://localhost:6379',
+    LARK_APP_ID: 'cli_test_app',
+    LARK_APP_SECRET: 'test-secret',
+    LARK_TENANT_KEY: 'tenant_test',
+    LARK_BOT_OPEN_ID: 'ou_bot',
+    LARK_WORKSPACE_ID: 'workspace-1',
+    LARK_OAUTH_REDIRECT_URI: 'http://localhost:3000/callback',
+    LARK_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32).toString('base64'),
+  });
+
+  expect(configuration.lark?.redisUrl).toBe('redis://localhost:6379');
+});

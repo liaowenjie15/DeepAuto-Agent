@@ -63,10 +63,11 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-deepauto}:${POSTGRES_PASSWORD:-deepauto_local}@postgres:5432/${POSTGRES_DB:-deepauto}
+      REDIS_URL: redis://redis:6379
       DEEPAUTO_GATEWAY_HOST: 0.0.0.0
-      DEEPAUTO_GATEWAY_PORT: 3000
+      DEEPAUTO_GATEWAY_PORT: ${DEEPAUTO_GATEWAY_PORT:-7681}
     ports:
-      - "127.0.0.1:${DEEPAUTO_GATEWAY_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${DEEPAUTO_GATEWAY_HOST_PORT:-7681}:${DEEPAUTO_GATEWAY_PORT:-7681}"
     depends_on:
       postgres:
         condition: service_healthy
